@@ -1,0 +1,16 @@
+[Unit]
+Description=DeepSeek-OCR Web Service
+After=network.target snap.ollama.listener.service
+Wants=snap.ollama.listener.service
+
+[Service]
+Type=simple
+User=rongheng
+WorkingDirectory=/home/rongheng/python_project/deepseek-ocr
+ExecStart=/home/rongheng/python_project/deepseek-ocr/.venv/bin/deepseek-ocr serve --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=10
+Environment=OLLAMA_HOST=http://localhost:11434
+
+[Install]
+WantedBy=multi-user.target

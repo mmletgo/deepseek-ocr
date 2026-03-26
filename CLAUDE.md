@@ -3,11 +3,12 @@
 使用本地 DeepSeek-OCR 模型将英文扫描 PDF 转化为可搜索双层 PDF 和 Markdown 文件的工具。
 
 ## 技术栈
-- **模型推理**: Ollama + deepseek-ocr (Apple Silicon Metal 加速)
+- **模型推理**: Ollama + deepseek-ocr (支持 NVIDIA CUDA / Apple Silicon Metal / CPU)
 - **PDF处理**: PyMuPDF (pymupdf)
 - **CLI**: Click + Rich
 - **Web**: FastAPI + SSE + 原生前端
 - **Python**: 3.12+, 严格类型定义
+- **平台**: Linux (Ubuntu) / macOS
 
 ## 项目结构
 
