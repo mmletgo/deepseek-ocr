@@ -451,3 +451,119 @@ footer p {
         min-width: auto;
     }
 }
+
+/* ─── 任务列表 ──────────────────────────────────── */
+.task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.task-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    background: var(--color-surface);
+    transition: box-shadow var(--transition);
+}
+
+.task-card:hover {
+    box-shadow: var(--shadow);
+}
+
+/* 卡片头部 */
+.task-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    gap: 8px;
+}
+
+.task-filename {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+/* Phase 状态徽标 */
+.task-phase-badge {
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.phase-waiting_ocr { background: #fef3c7; color: #92400e; }
+.phase-reading_pdf { background: var(--color-primary-light); color: var(--color-primary); }
+.phase-ocr         { background: #f3e8ff; color: #7c3aed; }
+.phase-generating  { background: var(--color-success-light); color: var(--color-success); }
+.phase-done        { background: var(--color-success-light); color: var(--color-success); }
+
+/* 进度区域 */
+.task-progress {
+    margin-bottom: 0;
+}
+
+.task-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+}
+
+.task-percent {
+    font-weight: 500;
+    color: var(--color-text);
+    flex-shrink: 0;
+}
+
+/* 下载按钮组 */
+.task-downloads {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+/* 错误提示 */
+.task-error {
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: var(--color-error);
+    background: var(--color-error-light);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    word-break: break-word;
+}
+
+/* 清除按钮 */
+.clear-btn {
+    display: block;
+    width: 100%;
+    margin-top: 16px;
+    padding: 10px 20px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.clear-btn:hover {
+    background: var(--color-bg);
+    border-color: var(--color-border-hover);
+    color: var(--color-text);
+}

@@ -2,11 +2,11 @@
  * DeepSeek-OCR Web 前端应用
  *
  * 核心功能:
- * 1. 拖拽上传PDF文件
- * 2. 文件选择上传
- * 3. 通过SSE实时接收转换进度
- * 4. 显示下载链接
- * 5. 错误处理和状态管理
+ * 1. 拖拽上传多个PDF文件
+ * 2. 文件选择上传（支持多选）
+ * 3. 每个任务独立SSE实时接收转换进度
+ * 4. 任务卡片显示各文件进度和下载链接
+ * 5. 错误处理和任务状态管理
  *
  * 纯原生JS实现，不依赖任何框架
  */
@@ -14,329 +14,266 @@
 (function () {
     "use strict";
 
-    // --- DOM元素引用 ---
+    // --- DOM 元素 ---
     const uploadZone = document.getElementById("uploadZone");
     const fileInput = document.getElementById("fileInput");
     const uploadBtn = document.getElementById("uploadBtn");
-    const fileInfo = document.getElementById("fileInfo");
-    const fileInfoName = document.getElementById("fileInfoName");
-    const fileInfoSize = document.getElementById("fileInfoSize");
-    const progressSection = document.getElementById("progressSection");
-    const progressBar = document.getElementById("progressBar");
-    const progressPercent = document.getElementById("progressPercent");
-    const progressStatus = document.getElementById("progressStatus");
-    const resultSection = document.getElementById("resultSection");
-    const downloadPdfBtn = document.getElementById("downloadPdfBtn");
-    const downloadMdBtn = document.getElementById("downloadMdBtn");
-    const errorSection = document.getElementById("errorSection");
-    const errorText = document.getElementById("errorText");
-    const resetBtn = document.getElementById("resetBtn");
+    const taskList = document.getElementById("taskList");
+    const clearDoneBtn = document.getElementById("clearDoneBtn");
     const healthDot = document.getElementById("healthDot");
     const healthText = document.getElementById("healthText");
 
-    // --- 状态变量 ---
-    let currentTaskId = null;
-    let eventSource = null;
-    let isUploading = false;
+    // --- 状态 ---
+    // taskRegistry[taskId] = { filename, eventSource, status }
+    var taskRegistry = {};
+    var isUploading = false;
+
+    // phase 文字映射
+    var PHASE_LABELS = {
+        waiting_ocr: "Waiting for GPU",
+        reading_pdf: "Reading",
+        ocr: "OCR",
+        generating: "Generating",
+        done: "Done",
+    };
 
     // --- 初始化 ---
     init();
 
     function init() {
-        // 绑定拖拽事件
         bindDragEvents();
-        // 绑定文件选择事件
         bindFileEvents();
-        // 绑定重置按钮
-        bindResetEvent();
-        // 检查服务健康状态
+        bindClearBtn();
         checkHealth();
     }
 
-    // --- 拖拽上传事件绑定 ---
+    // --- 拖拽事件（与原来完全一致，只改 handleFile → handleFiles） ---
     function bindDragEvents() {
-        // 阻止浏览器默认拖拽行为
-        ["dragenter", "dragover", "dragleave", "drop"].forEach(function (eventName) {
-            uploadZone.addEventListener(eventName, function (e) {
+        ["dragenter", "dragover", "dragleave", "drop"].forEach(function (ev) {
+            uploadZone.addEventListener(ev, function (e) {
                 e.preventDefault();
                 e.stopPropagation();
             });
         });
-
-        // 拖入时高亮
-        ["dragenter", "dragover"].forEach(function (eventName) {
-            uploadZone.addEventListener(eventName, function () {
-                if (!isUploading) {
-                    uploadZone.classList.add("drag-over");
-                }
+        ["dragenter", "dragover"].forEach(function (ev) {
+            uploadZone.addEventListener(ev, function () {
+                if (!isUploading) uploadZone.classList.add("drag-over");
             });
         });
-
-        // 拖出时取消高亮
-        ["dragleave", "drop"].forEach(function (eventName) {
-            uploadZone.addEventListener(eventName, function () {
+        ["dragleave", "drop"].forEach(function (ev) {
+            uploadZone.addEventListener(ev, function () {
                 uploadZone.classList.remove("drag-over");
             });
         });
-
-        // 拖放文件处理
         uploadZone.addEventListener("drop", function (e) {
             if (isUploading) return;
-            var files = e.dataTransfer.files;
-            if (files.length > 0) {
-                handleFile(files[0]);
-            }
+            if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
         });
     }
 
-    // --- 文件选择事件绑定 ---
     function bindFileEvents() {
-        // 点击上传按钮触发文件选择
         uploadBtn.addEventListener("click", function (e) {
             e.stopPropagation();
-            if (!isUploading) {
-                fileInput.click();
-            }
+            if (!isUploading) fileInput.click();
         });
-
-        // 点击上传区域也触发文件选择
         uploadZone.addEventListener("click", function () {
-            if (!isUploading) {
-                fileInput.click();
-            }
+            if (!isUploading) fileInput.click();
         });
-
-        // 文件选择后处理
         fileInput.addEventListener("change", function () {
-            if (fileInput.files.length > 0) {
-                handleFile(fileInput.files[0]);
-            }
+            if (fileInput.files.length > 0) handleFiles(fileInput.files);
         });
     }
 
-    // --- 重置按钮事件绑定 ---
-    function bindResetEvent() {
-        resetBtn.addEventListener("click", function () {
-            resetUI();
+    function bindClearBtn() {
+        clearDoneBtn.addEventListener("click", function () {
+            Object.keys(taskRegistry).forEach(function (taskId) {
+                var t = taskRegistry[taskId];
+                if (t.status === "done" || t.status === "error") {
+                    var el = document.getElementById("task-" + taskId);
+                    if (el) el.remove();
+                    delete taskRegistry[taskId];
+                }
+            });
+            updateClearBtnVisibility();
         });
     }
 
-    /**
-     * 处理选中的文件
-     * 验证文件类型后显示文件信息并开始上传
-     */
-    function handleFile(file) {
-        // 验证文件类型
-        if (!file.name.toLowerCase().endsWith(".pdf")) {
-            showError("Please select a PDF file.");
+    // --- 处理多文件 ---
+    async function handleFiles(files) {
+        var pdfFiles = Array.from(files).filter(function (f) {
+            return f.name.toLowerCase().endsWith(".pdf");
+        });
+        if (pdfFiles.length === 0) {
+            // 没有有效 PDF，简单忽略
             return;
         }
 
-        // 显示文件信息
-        fileInfoName.textContent = file.name;
-        fileInfoSize.textContent = formatFileSize(file.size);
-        fileInfo.classList.add("visible");
-
-        // 开始上传
-        uploadFile(file);
-    }
-
-    /**
-     * 上传文件到服务器
-     * 使用fetch POST请求上传PDF文件
-     */
-    async function uploadFile(file) {
-        if (isUploading) return;
         isUploading = true;
-
-        // 禁用上传区域
         uploadZone.classList.add("disabled");
-        hideError();
-        hideResult();
-
-        // 显示进度区域
-        showProgress();
-        updateProgress(0, 0, "Uploading file...");
 
         var formData = new FormData();
-        formData.append("file", file);
+        pdfFiles.forEach(function (f) {
+            formData.append("files", f);   // 字段名 "files"（复数）
+        });
 
         try {
             var response = await fetch("/api/upload", {
                 method: "POST",
                 body: formData,
             });
-
             if (!response.ok) {
-                var errorData = await response.json().catch(function () {
+                var errData = await response.json().catch(function () {
                     return { detail: "Upload failed (HTTP " + response.status + ")" };
                 });
-                throw new Error(errorData.detail || "Upload failed");
+                throw new Error(errData.detail || "Upload failed");
             }
-
-            var data = await response.json();
-            currentTaskId = data.task_id;
-
-            updateProgress(0, 0, "Upload complete, starting conversion...");
-
-            // 连接SSE获取进度
-            connectSSE(currentTaskId);
-
+            var results = await response.json();  // [{task_id, filename}, ...]
+            results.forEach(function (item) {
+                createTaskCard(item.task_id, item.filename);
+                connectTaskSSE(item.task_id);
+            });
         } catch (err) {
+            // 显示全局错误（复用 uploadZone 区域提示）
+            console.error("Upload error:", err);
+            // 简单 alert，不影响已有任务
+            alert("Upload failed: " + err.message);
+        } finally {
             isUploading = false;
             uploadZone.classList.remove("disabled");
-            hideProgress();
-            showError("Upload failed: " + err.message);
+            fileInput.value = "";
         }
     }
 
-    /**
-     * 连接SSE获取转换进度
-     * 使用EventSource监听服务器推送的进度事件
-     */
-    function connectSSE(taskId) {
-        // 关闭旧连接
-        if (eventSource) {
-            eventSource.close();
-            eventSource = null;
-        }
+    // --- 任务卡片 ---
+    function createTaskCard(taskId, filename) {
+        taskRegistry[taskId] = { filename: filename, eventSource: null, status: "pending" };
 
-        eventSource = new EventSource("/api/progress/" + taskId);
+        var card = document.createElement("div");
+        card.className = "task-card";
+        card.id = "task-" + taskId;
+        card.innerHTML =
+            '<div class="task-header">' +
+                '<span class="task-filename" title="' + escapeHtml(filename) + '">' + escapeHtml(filename) + '</span>' +
+                '<span class="task-phase-badge phase-waiting_ocr" id="badge-' + taskId + '">' + PHASE_LABELS.waiting_ocr + '</span>' +
+            '</div>' +
+            '<div class="task-progress">' +
+                '<div class="progress-bar-container">' +
+                    '<div class="progress-bar" id="bar-' + taskId + '" style="width:0%"></div>' +
+                '</div>' +
+                '<div class="task-status-row">' +
+                    '<span class="task-status-text" id="status-' + taskId + '">Waiting...</span>' +
+                    '<span class="task-percent" id="pct-' + taskId + '">0%</span>' +
+                '</div>' +
+            '</div>' +
+            '<div class="task-downloads" id="dl-' + taskId + '" style="display:none">' +
+                '<a href="/api/download/' + taskId + '/pdf" class="download-btn" download>' +
+                    '<span class="download-btn-icon" aria-hidden="true">&#128196;</span>Download PDF' +
+                '</a>' +
+                '<a href="/api/download/' + taskId + '/markdown" class="download-btn" download>' +
+                    '<span class="download-btn-icon" aria-hidden="true">&#128221;</span>Download Markdown' +
+                '</a>' +
+            '</div>' +
+            '<div class="task-error" id="err-' + taskId + '" style="display:none"></div>';
 
-        // 监听进度事件
-        eventSource.addEventListener("progress", function (e) {
+        taskList.appendChild(card);
+    }
+
+    // --- SSE 连接（每任务独立） ---
+    function connectTaskSSE(taskId) {
+        var es = new EventSource("/api/progress/" + taskId);
+        taskRegistry[taskId].eventSource = es;
+
+        es.addEventListener("progress", function (e) {
             var data = JSON.parse(e.data);
-            updateProgress(data.current, data.total, data.status);
+            updateTaskCard(taskId, data);
 
             if (data.done) {
-                eventSource.close();
-                eventSource = null;
-                isUploading = false;
-
-                if (data.error) {
-                    // 转换出错
-                    showError("Conversion failed: " + data.error);
-                    resetBtn.classList.add("visible");
-                } else {
-                    // 转换完成
-                    showResult(taskId);
-                    resetBtn.classList.add("visible");
-                }
+                es.close();
+                taskRegistry[taskId].status = data.error ? "error" : "done";
+                updateClearBtnVisibility();
             }
         });
 
-        // 错误处理
-        eventSource.addEventListener("error", function (e) {
-            // SSE连接错误
-            if (eventSource) {
-                eventSource.close();
-                eventSource = null;
-            }
-            // 检查是否为正常关闭（EventSource会在服务端关闭后尝试重连触发error）
-            if (isUploading) {
-                isUploading = false;
-                showError("Lost connection to server. Please try again.");
-                resetBtn.classList.add("visible");
+        es.addEventListener("error", function () {
+            if (taskRegistry[taskId] && taskRegistry[taskId].status === "pending") {
+                es.close();
+                markTaskError(taskId, "Connection lost");
             }
         });
     }
 
-    /**
-     * 更新进度条UI
-     * 根据当前页数和总页数计算进度百分比
-     */
-    function updateProgress(current, total, status) {
-        var percent = 0;
-        if (total > 0) {
-            percent = Math.round((current / total) * 100);
+    // --- 更新卡片 ---
+    function updateTaskCard(taskId, data) {
+        var total = data.total || 0;
+        var current = data.current || 0;
+        var pct = total > 0 ? Math.round((current / total) * 100) : 0;
+
+        var bar = document.getElementById("bar-" + taskId);
+        var pctEl = document.getElementById("pct-" + taskId);
+        var statusEl = document.getElementById("status-" + taskId);
+        var badge = document.getElementById("badge-" + taskId);
+        var dlEl = document.getElementById("dl-" + taskId);
+        var errEl = document.getElementById("err-" + taskId);
+
+        if (bar) {
+            bar.style.width = pct + "%";
+            if (pct >= 100) bar.classList.add("completed");
+            else bar.classList.remove("completed");
+        }
+        if (pctEl) pctEl.textContent = pct + "%";
+        if (statusEl) statusEl.textContent = data.status || "";
+
+        // 更新 phase 徽标
+        if (badge && data.phase) {
+            badge.className = "task-phase-badge phase-" + data.phase;
+            badge.textContent = PHASE_LABELS[data.phase] || data.phase;
         }
 
-        progressBar.style.width = percent + "%";
-        progressPercent.textContent = percent + "%";
-        progressStatus.textContent = status || "";
+        // 完成时显示下载
+        if (data.done && !data.error) {
+            if (dlEl) dlEl.style.display = "flex";
+        }
 
-        // 完成时移除动画效果
-        if (percent >= 100) {
-            progressBar.classList.add("completed");
-        } else {
-            progressBar.classList.remove("completed");
+        // 出错时显示错误
+        if (data.error) {
+            if (errEl) {
+                errEl.textContent = data.error;
+                errEl.style.display = "block";
+            }
         }
     }
 
-    // --- 显示/隐藏进度区域 ---
-    function showProgress() {
-        progressSection.classList.add("visible");
-        progressBar.style.width = "0%";
-        progressBar.classList.remove("completed");
-        progressPercent.textContent = "0%";
-        progressStatus.textContent = "";
-    }
-
-    function hideProgress() {
-        progressSection.classList.remove("visible");
-    }
-
-    /**
-     * 显示转换结果下载区域
-     * 设置下载链接的href属性
-     */
-    function showResult(taskId) {
-        downloadPdfBtn.href = "/api/download/" + taskId + "/pdf";
-        downloadMdBtn.href = "/api/download/" + taskId + "/markdown";
-        resultSection.classList.add("visible");
-    }
-
-    function hideResult() {
-        resultSection.classList.remove("visible");
-    }
-
-    // --- 错误提示 ---
-    function showError(message) {
-        errorText.textContent = message;
-        errorSection.classList.add("visible");
-    }
-
-    function hideError() {
-        errorSection.classList.remove("visible");
-    }
-
-    /**
-     * 重置UI到初始状态
-     * 清除所有状态并恢复上传区域
-     */
-    function resetUI() {
-        // 关闭SSE连接
-        if (eventSource) {
-            eventSource.close();
-            eventSource = null;
+    function markTaskError(taskId, msg) {
+        taskRegistry[taskId].status = "error";
+        var errEl = document.getElementById("err-" + taskId);
+        if (errEl) {
+            errEl.textContent = msg;
+            errEl.style.display = "block";
         }
-
-        currentTaskId = null;
-        isUploading = false;
-
-        // 重置文件输入
-        fileInput.value = "";
-
-        // 隐藏所有状态区域
-        fileInfo.classList.remove("visible");
-        hideProgress();
-        hideResult();
-        hideError();
-        resetBtn.classList.remove("visible");
-
-        // 恢复上传区域
-        uploadZone.classList.remove("disabled");
+        updateClearBtnVisibility();
     }
 
-    /**
-     * 检查后端服务健康状态
-     * 通过/api/health接口获取Ollama连接状态
-     */
+    function updateClearBtnVisibility() {
+        var hasDone = Object.keys(taskRegistry).some(function (id) {
+            var s = taskRegistry[id].status;
+            return s === "done" || s === "error";
+        });
+        clearDoneBtn.style.display = hasDone ? "block" : "none";
+    }
+
+    function escapeHtml(text) {
+        return text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    // --- 健康检查（与原来完全一致） ---
     async function checkHealth() {
         try {
             var response = await fetch("/api/health");
             var data = await response.json();
-
             if (data.ollama === "connected" && data.model_available) {
                 healthDot.classList.add("ok");
                 healthDot.classList.remove("error");
@@ -357,10 +294,7 @@
         }
     }
 
-    /**
-     * 格式化文件大小
-     * 将字节数转换为可读的KB/MB/GB格式
-     */
+    // --- 工具函数（原有，保留） ---
     function formatFileSize(bytes) {
         if (bytes === 0) return "0 B";
         var units = ["B", "KB", "MB", "GB"];
