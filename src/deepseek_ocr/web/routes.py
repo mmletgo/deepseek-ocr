@@ -13,13 +13,19 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 import asyncio
+import concurrent.futures
 import uuid
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 from deepseek_ocr.config import AppConfig
 from deepseek_ocr.utils.logger import logger
+from deepseek_ocr.core.pdf_reader import PDFReader, PageImage
+from deepseek_ocr.core.ocr_engine import OCREngine, OCRResult
+from deepseek_ocr.core.output_parser import OutputParser, ParsedPage
+from deepseek_ocr.core.pdf_writer import DualLayerPDFWriter
+from deepseek_ocr.core.markdown_writer import MarkdownWriter
 
 router = APIRouter()
 
@@ -28,6 +34,17 @@ tasks: dict[str, dict[str, Any]] = {}
 
 # 全局配置
 _config = AppConfig()
+
+# OCR 串行锁：同一时刻只允许一个任务调用 Ollama
+_ocr_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_ocr_semaphore() -> asyncio.Semaphore:
+    """惰性初始化OCR串行锁，确保在事件循环启动后创建"""
+    global _ocr_semaphore
+    if _ocr_semaphore is None:
+        _ocr_semaphore = asyncio.Semaphore(1)
+    return _ocr_semaphore
 
 
 @router.get("/")
@@ -47,141 +64,186 @@ async def index() -> HTMLResponse:
 
 
 @router.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_pdf(files: List[UploadFile] = File(...)) -> list[dict[str, str]]:
     """
     Business Logic:
-        用户上传PDF文件后，系统需要保存文件并启动异步OCR转换任务，
-        返回任务ID供前端轮询进度。
+        用户上传一个或多个PDF文件后，系统需要保存文件并启动异步OCR转换任务，
+        返回任务ID列表供前端轮询进度。
 
     Code Logic:
-        1. 验证上传文件是否为PDF格式
-        2. 生成唯一task_id (UUID)
+        1. 验证每个上传文件是否为PDF格式
+        2. 为每个文件生成唯一task_id (UUID)
         3. 将上传文件保存到 uploads/{task_id}/ 目录
         4. 初始化任务状态并创建后台异步转换任务
-        5. 返回task_id和原始文件名
+        5. 返回包含task_id和原始文件名的列表
     """
-    # 验证文件类型
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    results: list[dict[str, str]] = []
 
-    # 检查content_type
-    if file.content_type and file.content_type != "application/pdf":
-        # 某些浏览器可能不设置content_type，所以仅在有值时校验
-        if "pdf" not in file.content_type.lower():
+    for file in files:
+        # 验证文件类型
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
-    task_id: str = str(uuid.uuid4())
+        # 检查content_type
+        if file.content_type and file.content_type != "application/pdf":
+            # 某些浏览器可能不设置content_type，所以仅在有值时校验
+            if "pdf" not in file.content_type.lower():
+                raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
-    # 创建上传目录
-    upload_dir = Path(_config.web.upload_dir) / task_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
+        task_id: str = str(uuid.uuid4())
 
-    # 保存上传文件
-    file_path = upload_dir / file.filename
-    file_content: bytes = await file.read()
+        # 创建上传目录
+        upload_dir = Path(_config.web.upload_dir) / task_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # 检查文件大小
-    max_size: int = _config.web.max_upload_size_mb * 1024 * 1024
-    if len(file_content) > max_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size: {_config.web.max_upload_size_mb}MB"
-        )
+        # 保存上传文件
+        file_path = upload_dir / file.filename
+        file_content: bytes = await file.read()
 
-    with open(file_path, "wb") as f:
-        f.write(file_content)
+        # 检查文件大小
+        max_size: int = _config.web.max_upload_size_mb * 1024 * 1024
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size: {_config.web.max_upload_size_mb}MB"
+            )
 
-    # 初始化任务状态
-    tasks[task_id] = {
-        "status": "queued",
-        "current": 0,
-        "total": 0,
-        "message": "Waiting to start...",
-        "done": False,
-        "error": None,
-        "input_file": str(file_path),
-        "output_dir": str(upload_dir / "output"),
-        "result_pdf": None,
-        "result_markdown": None,
-        "filename": file.filename,
-    }
+        with open(file_path, "wb") as f:
+            f.write(file_content)
 
-    # 启动后台转换任务
-    asyncio.create_task(_run_conversion(task_id))
+        # 初始化任务状态
+        tasks[task_id] = {
+            "status": "queued",
+            "phase": "waiting_ocr",
+            "current": 0,
+            "total": 0,
+            "message": "Waiting to start...",
+            "done": False,
+            "error": None,
+            "input_file": str(file_path),
+            "output_dir": str(upload_dir / "output"),
+            "result_pdf": None,
+            "result_markdown": None,
+            "filename": file.filename,
+        }
 
-    logger.info(f"Task {task_id} created for file: {file.filename}")
+        # 启动后台转换任务
+        asyncio.create_task(_run_conversion(task_id))
 
-    return {"task_id": task_id, "filename": file.filename}
+        logger.info(f"Task {task_id} created for file: {file.filename}")
+
+        results.append({"task_id": task_id, "filename": file.filename})
+
+    return results
 
 
 async def _run_conversion(task_id: str) -> None:
     """
     Business Logic:
-        后台执行PDF OCR转换，实时更新任务进度供SSE推送。
+        后台执行PDF OCR转换的主流程编排，分步骤执行：
+        CPU密集步骤放线程池以防阻塞事件循环，
+        OCR步骤用串行锁确保同一时刻只有一个任务占用GPU。
 
     Code Logic:
-        使用ConversionPipeline的异步接口执行转换，通过进度回调更新tasks字典。
-        转换完成后记录结果文件路径，出错时记录错误信息。
+        步骤1: PDF读取 → run_in_executor（非阻塞事件循环）
+        步骤2: OCR → asyncio.Semaphore(1)串行锁 + 异步逐页调用
+        步骤3: 解析 → 同步（极快）
+        步骤4: 生成双层PDF → run_in_executor（内部页面级并行）
+        步骤5: 写Markdown → run_in_executor
     """
     task = tasks.get(task_id)
     if task is None:
         return
 
-    task["status"] = "running"
-    task["message"] = "Initializing..."
+    loop = asyncio.get_event_loop()
+    config = AppConfig()
 
-    def progress_callback(current: int, total: int, message: str) -> None:
-        """进度回调，更新任务状态"""
-        if task_id in tasks:
-            tasks[task_id]["current"] = current
-            tasks[task_id]["total"] = total
-            tasks[task_id]["message"] = message
+    pdf_reader: PDFReader = PDFReader(dpi=config.pdf.dpi, max_dimension=config.pdf.max_dimension)
+    ocr_engine: OCREngine = OCREngine(config.ollama)
+    parser: OutputParser = OutputParser()
+    pdf_writer: DualLayerPDFWriter = DualLayerPDFWriter()
+    md_writer: MarkdownWriter = MarkdownWriter()
+
+    input_file: str = task["input_file"]
+    output_dir: str = task["output_dir"]
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     try:
-        from deepseek_ocr.core.pipeline import ConversionPipeline
+        # 步骤1: 读取 PDF（CPU密集 → 线程池，非阻塞事件循环）
+        task.update({"status": "running", "phase": "reading_pdf",
+                     "message": "Reading PDF..."})
+        page_images: list[PageImage] = await loop.run_in_executor(
+            None, pdf_reader.read_pdf, input_file
+        )
+        total_pages: int = len(page_images)
+        task["total"] = total_pages
+        logger.info(f"Task {task_id}: PDF读取完成, 共 {total_pages} 页")
 
-        config = AppConfig()
-        pipeline = ConversionPipeline(
-            config=config,
-            progress_callback=progress_callback,
+        # 步骤2: OCR（串行锁，逐页异步调用 Ollama）
+        task.update({"phase": "waiting_ocr", "message": "Waiting for GPU..."})
+        semaphore: asyncio.Semaphore = _get_ocr_semaphore()
+
+        async with semaphore:
+            ocr_results: list[OCRResult] = []
+            for i, page_img in enumerate(page_images):
+                task.update({
+                    "phase": "ocr",
+                    "current": i + 1,
+                    "message": f"OCR page {i + 1}/{total_pages}",
+                })
+                result: OCRResult = await ocr_engine.ocr_single_image_async(
+                    image_data=page_img.image_bytes,
+                    page_index=page_img.page_index,
+                )
+                ocr_results.append(result)
+                if not result.success:
+                    logger.warning(f"Task {task_id}: 页 {i} OCR失败: {result.error_msg}")
+
+        # 步骤3: 解析 OCR 结果（极快，直接同步）
+        task.update({"phase": "generating", "message": "Parsing results..."})
+        parsed_pages: list[ParsedPage] = [
+            parser.parse(r.raw_text, r.page_index) for r in ocr_results
+        ]
+
+        # 步骤4: 生成双层 PDF（run_in_executor，内部页面级并行）
+        task["message"] = "Generating PDF..."
+        stem: str = Path(input_file).stem
+        output_pdf_path: Path = Path(output_dir) / f"{stem}_ocr.pdf"
+        await loop.run_in_executor(
+            None,
+            pdf_writer.create_dual_layer_pdf,
+            page_images,
+            parsed_pages,
+            output_pdf_path,
         )
 
-        input_file = task["input_file"]
-        output_dir = task["output_dir"]
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-        result = await pipeline.convert_async(
-            input_pdf=input_file,
-            output_dir=output_dir,
-            generate_pdf=True,
-            generate_markdown=True,
+        # 步骤5: 写 Markdown（run_in_executor）
+        task["message"] = "Writing Markdown..."
+        output_md_path: Path = Path(output_dir) / f"{stem}.md"
+        await loop.run_in_executor(
+            None, md_writer.write, parsed_pages, output_md_path
         )
 
-        # 记录结果文件路径
-        if result.output_pdf:
-            task["result_pdf"] = str(result.output_pdf)
-        if result.output_markdown:
-            task["result_markdown"] = str(result.output_markdown)
-
-        task["status"] = "completed"
-        task["done"] = True
-        task["message"] = "Conversion completed"
+        task.update({
+            "status": "completed",
+            "phase": "done",
+            "done": True,
+            "current": total_pages,
+            "message": "Conversion complete",
+            "result_pdf": str(output_pdf_path),
+            "result_markdown": str(output_md_path),
+        })
         logger.info(f"Task {task_id} completed successfully")
 
-    except ImportError as e:
-        # 核心模块尚未实现时的处理
-        task["status"] = "error"
-        task["done"] = True
-        task["error"] = f"Core module not available: {str(e)}"
-        task["message"] = f"Error: Core module not available"
-        logger.error(f"Task {task_id} failed - module not found: {e}")
-
     except Exception as e:
-        task["status"] = "error"
-        task["done"] = True
-        task["error"] = str(e)
-        task["message"] = f"Error: {str(e)}"
-        logger.error(f"Task {task_id} failed: {e}")
+        task.update({
+            "status": "error",
+            "phase": "done",
+            "done": True,
+            "error": str(e),
+            "message": f"Error: {str(e)}",
+        })
+        logger.error(f"Task {task_id} failed: {e}", exc_info=True)
 
 
 @router.get("/api/progress/{task_id}")
@@ -231,6 +293,7 @@ async def get_progress(task_id: str) -> EventSourceResponse:
                     "current": current,
                     "total": total,
                     "status": message,
+                    "phase": task.get("phase", ""),
                     "done": done,
                 }
                 if error:

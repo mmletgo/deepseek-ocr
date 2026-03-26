@@ -22,58 +22,14 @@
                 <h3>Drag and drop your PDF here</h3>
                 <p>or click to select a file</p>
                 <button type="button" class="upload-btn" id="uploadBtn">Select PDF File</button>
-                <input type="file" class="file-input" id="fileInput" accept=".pdf,application/pdf">
+                <input type="file" class="file-input" id="fileInput" accept=".pdf,application/pdf" multiple>
             </section>
 
-            <!-- 已选文件信息 -->
-            <div id="fileInfo" class="file-info">
-                <span class="file-info-icon" aria-hidden="true">&#128196;</span>
-                <div class="file-info-details">
-                    <div class="file-info-name" id="fileInfoName"></div>
-                    <div class="file-info-size" id="fileInfoSize"></div>
-                </div>
-            </div>
+            <!-- 任务列表 -->
+            <div id="taskList" class="task-list"></div>
 
-            <!-- 进度区域 -->
-            <section id="progressSection" class="progress-section" aria-label="Conversion progress">
-                <div class="progress-header">
-                    <span class="progress-label">Converting...</span>
-                    <span class="progress-percent" id="progressPercent">0%</span>
-                </div>
-                <div class="progress-bar-container">
-                    <div class="progress-bar" id="progressBar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-                </div>
-                <div class="progress-status" id="progressStatus"></div>
-            </section>
-
-            <!-- 转换结果区域 -->
-            <section id="resultSection" class="result-section" aria-label="Conversion results">
-                <div class="result-header">
-                    <span class="result-header-icon" aria-hidden="true">&#10004;</span>
-                    <h3>Conversion Complete</h3>
-                </div>
-                <div class="download-buttons">
-                    <a id="downloadPdfBtn" class="download-btn" href="#" download>
-                        <span class="download-btn-icon" aria-hidden="true">&#128196;</span>
-                        Download PDF
-                    </a>
-                    <a id="downloadMdBtn" class="download-btn" href="#" download>
-                        <span class="download-btn-icon" aria-hidden="true">&#128221;</span>
-                        Download Markdown
-                    </a>
-                </div>
-            </section>
-
-            <!-- 错误提示区域 -->
-            <section id="errorSection" class="error-section" aria-label="Error message">
-                <div class="error-message">
-                    <span class="error-icon" aria-hidden="true">&#9888;</span>
-                    <span class="error-text" id="errorText"></span>
-                </div>
-            </section>
-
-            <!-- 重新上传按钮 -->
-            <button type="button" class="reset-btn" id="resetBtn">Upload Another File</button>
+            <!-- 清除已完成按钮 -->
+            <button type="button" id="clearDoneBtn" class="clear-btn" style="display:none">Clear Completed</button>
         </main>
 
         <!-- 页脚 -->
