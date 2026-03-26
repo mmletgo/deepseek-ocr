@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "deepseek-ocr"
+version = "0.1.0"
+description = "使用 DeepSeek-OCR 模型将英文扫描PDF转化为可搜索PDF和Markdown"
+requires-python = ">=3.12"
+
+dependencies = [
+    "ollama>=0.4",
+    "PyMuPDF>=1.25",
+    "click>=8.0",
+    "rich>=13.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "sse-starlette>=2.0",
+    "Pillow>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+deepseek-ocr = "deepseek_ocr.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
