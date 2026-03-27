@@ -77,73 +77,79 @@ async def index() -> HTMLResponse:
 
 
 @router.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_pdf(files: List[UploadFile] = File(...)) -> list[dict[str, str]]:
     """
     Business Logic:
-        用户上传PDF文件后，系统需要保存文件并启动异步OCR转换任务，
-        返回任务ID供前端轮询进度。
+        用户上传一个或多个PDF文件后，系统保存文件并为每个文件启动异步OCR任务，
+        返回任务ID列表供前端独立追踪进度。
 
     Code Logic:
-        1. 验证上传文件是否为PDF格式
+        对每个上传文件：
+        1. 验证文件是否为PDF格式
         2. 生成唯一task_id (UUID)
-        3. 将上传文件保存到 uploads/{task_id}/ 目录
-        4. 初始化任务状态并创建后台异步转换任务
-        5. 返回task_id和原始文件名
+        3. 将文件保存到 uploads/{task_id}/ 目录
+        4. 初始化任务状态并启动后台转换任务
+        5. 收集并返回所有 {task_id, filename}
     """
-    # 验证文件类型
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    results: list[dict[str, str]] = []
 
-    # 检查content_type
-    if file.content_type and file.content_type != "application/pdf":
-        # 某些浏览器可能不设置content_type，所以仅在有值时校验
-        if "pdf" not in file.content_type.lower():
+    for file in files:
+        # 验证文件类型
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
-    task_id: str = str(uuid.uuid4())
+        # 检查content_type
+        if file.content_type and file.content_type != "application/pdf":
+            # 某些浏览器可能不设置content_type，所以仅在有值时校验
+            if "pdf" not in file.content_type.lower():
+                raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
-    # 创建上传目录
-    upload_dir = Path(_config.web.upload_dir) / task_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
+        task_id: str = str(uuid.uuid4())
 
-    # 保存上传文件
-    file_path = upload_dir / file.filename
-    file_content: bytes = await file.read()
+        # 创建上传目录
+        upload_dir = Path(_config.web.upload_dir) / task_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # 检查文件大小
-    max_size: int = _config.web.max_upload_size_mb * 1024 * 1024
-    if len(file_content) > max_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size: {_config.web.max_upload_size_mb}MB"
-        )
+        # 保存上传文件
+        file_path = upload_dir / file.filename
+        file_content: bytes = await file.read()
 
-    with open(file_path, "wb") as f:
-        f.write(file_content)
+        # 检查文件大小
+        max_size: int = _config.web.max_upload_size_mb * 1024 * 1024
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size: {_config.web.max_upload_size_mb}MB"
+            )
 
-    # 初始化任务状态
-    tasks[task_id] = {
-        "status": "queued",
-        "phase": "queued",
-        "current": 0,
-        "total": 0,
-        "message": "Waiting to start...",
-        "done": False,
-        "error": None,
-        "input_file": str(file_path),
-        "output_dir": str(upload_dir / "output"),
-        "result_pdf": None,
-        "result_markdown": None,
-        "filename": file.filename,
-        "pdf_md5": None,
-    }
+        with open(file_path, "wb") as f:
+            f.write(file_content)
 
-    # 启动后台转换任务
-    asyncio.create_task(_run_conversion(task_id))
+        # 初始化任务状态
+        tasks[task_id] = {
+            "status": "queued",
+            "phase": "queued",
+            "current": 0,
+            "total": 0,
+            "message": "Waiting to start...",
+            "done": False,
+            "error": None,
+            "input_file": str(file_path),
+            "output_dir": str(upload_dir / "output"),
+            "result_pdf": None,
+            "result_markdown": None,
+            "filename": file.filename,
+            "pdf_md5": None,
+        }
 
-    logger.info(f"Task {task_id} created for file: {file.filename}")
+        # 启动后台转换任务
+        asyncio.create_task(_run_conversion(task_id))
 
-    return {"task_id": task_id, "filename": file.filename}
+        logger.info(f"Task {task_id} created for file: {file.filename}")
+
+        results.append({"task_id": task_id, "filename": file.filename})
+
+    return results
 
 
 async def _run_conversion(task_id: str) -> None:
