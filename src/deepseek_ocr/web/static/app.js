@@ -160,6 +160,8 @@
 
         var formData = new FormData();
         formData.append("file", file);
+        var modeRadio = document.querySelector('input[name="pdfMode"]:checked');
+        formData.append("pdf_mode", modeRadio ? modeRadio.value : "dual_layer");
 
         try {
             var response = await fetch("/api/upload", {

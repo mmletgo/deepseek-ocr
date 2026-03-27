@@ -15,12 +15,17 @@
 | 方法 | 路径 | 功能 |
 |------|------|------|
 | GET | `/` | 返回主页面 |
-| POST | `/api/upload` | 上传PDF，返回task_id |
+| POST | `/api/upload` | 上传PDF(支持pdf_mode参数: dual_layer/rewrite)，返回task_id |
 | GET | `/api/progress/{task_id}` | SSE进度推送 |
 | GET | `/api/download/{task_id}/{file_type}` | 下载结果(pdf/markdown) |
 | GET | `/api/health` | 服务健康检查 |
 
 ## 任务管理
-- 内存字典 `tasks: dict[str, dict]` 管理任务状态
+- 内存字典 `tasks: dict[str, dict]` 管理任务状态（含 pdf_mode 字段）
 - 后台用 `asyncio.create_task` + `pipeline.convert_async` 执行转换
 - 进度通过 progress_callback 更新 tasks 字典，SSE 轮询推送
+
+## 前端模式选择
+- 上传区域包含 radio 按钮组：Dual Layer / Rewrite
+- FormData 附带 `pdf_mode` 字段传递给后端
+- 后端通过 `PDFConfig(output_mode=PDFOutputMode(pdf_mode))` 传递给 Pipeline

@@ -7,7 +7,7 @@
 
 | 命令 | 功能 |
 |------|------|
-| `convert <path>` | 转换PDF文件或目录，支持 --output/-o, --dpi, --no-pdf, --no-markdown, --model, --ollama-host |
+| `convert <path>` | 转换PDF文件或目录，支持 --output/-o, --dpi, --no-pdf, --no-markdown, --model, --ollama-host, --pdf-mode |
 | `check` | 检查Ollama服务和模型状态 |
 | `serve` | 启动FastAPI Web服务，支持 --host, --port |
 

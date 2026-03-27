@@ -57,6 +57,7 @@ class ConversionPipeline:
         """
         self.config: AppConfig = config
         self.progress_callback: Callable[[int, int, str], None] | None = progress_callback
+        self.pdf_mode: str = config.pdf.output_mode.value
 
         self.pdf_reader: PDFReader = PDFReader(
             dpi=config.pdf.dpi,
@@ -138,15 +139,16 @@ class ConversionPipeline:
                 )
                 parsed_pages.append(parsed)
 
-            # 步骤4: 生成双层PDF
+            # 步骤4: 生成PDF
             output_pdf_path: Path | None = None
             if generate_pdf:
-                self._report_progress(total_pages, total_pages, "正在生成双层PDF...")
+                self._report_progress(total_pages, total_pages, f"正在生成PDF ({self.pdf_mode}模式)...")
                 output_pdf_path = output_dir / f"{stem}_ocr.pdf"
                 self.pdf_writer.create_dual_layer_pdf(
                     page_images=page_images,
                     parsed_pages=parsed_pages,
                     output_path=output_pdf_path,
+                    mode=self.pdf_mode,
                 )
 
             # 步骤5: 生成Markdown
@@ -236,15 +238,16 @@ class ConversionPipeline:
                 )
                 parsed_pages.append(parsed)
 
-            # 步骤4: 生成双层PDF
+            # 步骤4: 生成PDF
             output_pdf_path: Path | None = None
             if generate_pdf:
-                self._report_progress(total_pages, total_pages, "正在生成双层PDF...")
+                self._report_progress(total_pages, total_pages, f"正在生成PDF ({self.pdf_mode}模式)...")
                 output_pdf_path = output_dir / f"{stem}_ocr.pdf"
                 self.pdf_writer.create_dual_layer_pdf(
                     page_images=page_images,
                     parsed_pages=parsed_pages,
                     output_path=output_pdf_path,
+                    mode=self.pdf_mode,
                 )
 
             # 步骤5: 生成Markdown

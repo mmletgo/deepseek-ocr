@@ -9,7 +9,7 @@ Code Logic:
     任务状态通过内存字典管理。
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 import asyncio
@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from deepseek_ocr.config import AppConfig
+from deepseek_ocr.config import AppConfig, PDFConfig, PDFOutputMode
 from deepseek_ocr.utils.logger import logger
 
 router = APIRouter()
@@ -47,7 +47,10 @@ async def index() -> HTMLResponse:
 
 
 @router.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_pdf(
+    file: UploadFile = File(...),
+    pdf_mode: str = Form("dual_layer"),
+) -> dict[str, str]:
     """
     Business Logic:
         用户上传PDF文件后，系统需要保存文件并启动异步OCR转换任务，
@@ -60,6 +63,10 @@ async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
         4. 初始化任务状态并创建后台异步转换任务
         5. 返回task_id和原始文件名
     """
+    # 验证pdf_mode
+    if pdf_mode not in ("dual_layer", "rewrite"):
+        raise HTTPException(status_code=400, detail=f"Invalid pdf_mode: {pdf_mode}")
+
     # 验证文件类型
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
@@ -104,6 +111,7 @@ async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
         "result_pdf": None,
         "result_markdown": None,
         "filename": file.filename,
+        "pdf_mode": pdf_mode,
     }
 
     # 启动后台转换任务
@@ -140,7 +148,10 @@ async def _run_conversion(task_id: str) -> None:
     try:
         from deepseek_ocr.core.pipeline import ConversionPipeline
 
-        config = AppConfig()
+        pdf_mode: str = task.get("pdf_mode", "dual_layer")
+        config = AppConfig(
+            pdf=PDFConfig(output_mode=PDFOutputMode(pdf_mode)),
+        )
         pipeline = ConversionPipeline(
             config=config,
             progress_callback=progress_callback,
