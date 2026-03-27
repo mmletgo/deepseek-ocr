@@ -4,15 +4,20 @@ Business Logic:
     生成双层PDF：底层是扫描图像(保持原始外观)，上层是透明文字层(支持搜索和复制)。
     支持两种模式：
     - dual_layer: 透明文字层(render_mode=3)，保持原始扫描外观
-    - rewrite: 白色遮盖文字区域 + 矢量字体重绘(render_mode=0)，图表/公式保持原始扫描
+    - rewrite: 白色遮盖文字区域 + 重新渲染，图表/图片保持原始扫描
+      - 纯文本 → 矢量字体重绘(render_mode=0)
+      - equation/formula 块 → matplotlib 渲染 LaTeX 公式为 PNG 嵌入
+      - 含内联 LaTeX(\(...\), \[...\])的文本 → matplotlib 混合渲染为 PNG 嵌入
+      - 所有 matplotlib 渲染块同时写入不可见搜索层(render_mode=3)
 
 Code Logic:
     使用PyMuPDF创建新PDF文档，逐页插入:
     1. 底层：原始扫描图像(overlay=False)
-    2. rewrite模式下：白色矩形遮盖文字区域
-    3. 上层：使用TextWriter写入文字(render_mode由模式决定)
+    2. rewrite模式下：白色矩形遮盖非 image/table 区域
+    3. 上层：三路径渲染(公式图片/内联LaTeX图片/矢量文字)
     坐标从归一化(0-999)转换为PDF坐标(pt)。
     页面渲染通过 ProcessPoolExecutor 多进程并行（每进程独立 GIL，真正多核）。
+    LaTeX 渲染使用 matplotlib mathtext 引擎(Agg后端)，支持子进程安全调用。
 """
 
 import concurrent.futures
@@ -25,7 +30,92 @@ from deepseek_ocr.core.pdf_reader import PageImage
 from deepseek_ocr.core.output_parser import ParsedPage
 from deepseek_ocr.utils.logger import logger
 
-_KEEP_ORIGINAL_LABELS: frozenset[str] = frozenset({"image", "table", "formula"})
+_KEEP_ORIGINAL_LABELS: frozenset[str] = frozenset({"image", "table"})
+
+
+def _wrap_line(line: str, font: object, fontsize: float, max_width: float) -> list[str]:
+    """将单行文本按 bbox 宽度折行（按单词边界），返回多个子行。"""
+    if not line.strip():
+        return [line]
+    if font.text_length(line, fontsize=fontsize) <= max_width:  # type: ignore[union-attr]
+        return [line]
+    words: list[str] = line.split()
+    wrapped: list[str] = []
+    current: str = ""
+    for word in words:
+        test: str = (current + " " + word).strip()
+        if font.text_length(test, fontsize=fontsize) <= max_width:  # type: ignore[union-attr]
+            current = test
+        else:
+            if current:
+                wrapped.append(current)
+            current = word
+    if current:
+        wrapped.append(current)
+    return wrapped if wrapped else [line]
+
+
+def _contains_latex(text: str) -> bool:
+    """检测文本中是否包含 LaTeX 数学公式标记。"""
+    return r'\(' in text or r'\)' in text or r'\[' in text or r'\]' in text
+
+
+def _render_latex_image(latex: str, width_pt: float, height_pt: float, dpi: int = 200) -> bytes:
+    """渲染 LaTeX 公式为 PNG 图片（用于 equation/formula 块）。"""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from io import BytesIO
+
+    # 清理 LaTeX：去掉 \[ \] 包裹，转为 matplotlib 内联数学格式
+    text: str = latex.strip()
+    text = text.replace(r'\[', '$').replace(r'\]', '$')
+    text = text.replace(r'\(', '$').replace(r'\)', '$')
+    if '$' not in text:
+        text = '$' + text + '$'
+
+    fig_w: float = max(width_pt / 72.0, 0.5)
+    fig_h: float = max(height_pt / 72.0, 0.3)
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    try:
+        fig.text(0.5, 0.5, text, fontsize=11, ha='center', va='center',
+                 math_fontfamily='cm')
+        buf: BytesIO = BytesIO()
+        fig.savefig(buf, format='png', dpi=dpi, facecolor='white',
+                    bbox_inches='tight', pad_inches=0.05)
+        return buf.getvalue()
+    finally:
+        plt.close(fig)
+
+
+def _render_text_image(text: str, label: str, width_pt: float, height_pt: float, dpi: int = 200) -> bytes:
+    """渲染含内联 LaTeX 的文本块为 PNG 图片。"""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from io import BytesIO
+
+    # 将 LaTeX 分隔符转为 matplotlib 格式
+    converted: str = text.replace(r'\(', '$').replace(r'\)', '$')
+    converted = converted.replace(r'\[', '$').replace(r'\]', '$')
+
+    fig_w: float = max(width_pt / 72.0, 0.5)
+    fig_h: float = max(height_pt / 72.0, 0.3)
+    fig = plt.figure(figsize=(fig_w, fig_h))
+
+    is_title: bool = label in ("title", "sub_title")
+    fontsize: int = 14 if is_title else 10
+    fontweight: str = 'bold' if is_title else 'normal'
+
+    try:
+        fig.text(0.02, 0.98, converted, fontsize=fontsize, fontweight=fontweight,
+                 va='top', ha='left', wrap=True, math_fontfamily='cm')
+        buf: BytesIO = BytesIO()
+        fig.savefig(buf, format='png', dpi=dpi, facecolor='white',
+                    bbox_inches='tight', pad_inches=0.05)
+        return buf.getvalue()
+    finally:
+        plt.close(fig)
 
 
 def _render_page_worker(args: tuple[PageImage, ParsedPage, str]) -> bytes:
@@ -69,35 +159,108 @@ def _render_page_worker(args: tuple[PageImage, ParsedPage, str]) -> bytes:
                     color=None, fill=(1, 1, 1), overlay=True,
                 )
 
-        tw = _fitz.TextWriter(page.rect)
-        for block in parsed.blocks:
-            if not block.text.strip():
-                continue
-            if mode == "rewrite" and block.label in _KEEP_ORIGINAL_LABELS:
-                continue
-            pdf_x1: float = block.bbox[0] / 999.0 * page.rect.width
-            pdf_y1: float = block.bbox[1] / 999.0 * page.rect.height
-            pdf_x2: float = block.bbox[2] / 999.0 * page.rect.width
-            pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
-            if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
-                continue
-            lines: list[str] = block.text.strip().split('\n')
-            fontsize: float = max(min((pdf_y2 - pdf_y1) / max(len(lines), 1) * 0.75, 36.0), 3.0)
-            # 逐行用 tw.append() 放置，完全避免 fill_textbox 的无限循环 bug
-            line_height: float = fontsize * 1.2
-            y: float = pdf_y1 + fontsize * 0.85  # 首行基线
-            for line in lines:
-                if y > pdf_y2:
-                    break
-                if line.strip():
+        if mode == "rewrite":
+            tw_visible = _fitz.TextWriter(page.rect)
+            tw_search = _fitz.TextWriter(page.rect)
+
+            for block in parsed.blocks:
+                if not block.text.strip():
+                    continue
+                if block.label in _KEEP_ORIGINAL_LABELS:
+                    continue
+                pdf_x1: float = block.bbox[0] / 999.0 * page.rect.width
+                pdf_y1: float = block.bbox[1] / 999.0 * page.rect.height
+                pdf_x2: float = block.bbox[2] / 999.0 * page.rect.width
+                pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
+                if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
+                    continue
+                bbox_width: float = pdf_x2 - pdf_x1
+                bbox_height: float = pdf_y2 - pdf_y1
+                block_rect = _fitz.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
+
+                if block.label in ("equation", "formula"):
+                    # 独立公式 → matplotlib 渲染
                     try:
-                        tw.append((pdf_x1, y), line, font=font, fontsize=fontsize)
+                        png_bytes: bytes = _render_latex_image(block.text, bbox_width, bbox_height)
+                        page.insert_image(block_rect, stream=png_bytes, overlay=True)
+                    except Exception:
+                        pass  # 渲染失败时跳过（保留白色背景）
+                    # 不可见搜索层
+                    try:
+                        tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
+                                         font=font, fontsize=3)
                     except Exception:
                         pass
-                y += line_height
-        # dual_layer: render_mode=3(不可见), rewrite: render_mode=0(可见)
-        render_mode: int = 0 if mode == "rewrite" else 3
-        tw.write_text(page, render_mode=render_mode)
+                elif _contains_latex(block.text):
+                    # 含内联 LaTeX 的文本 → matplotlib 渲染
+                    try:
+                        png_bytes = _render_text_image(block.text, block.label,
+                                                       bbox_width, bbox_height)
+                        page.insert_image(block_rect, stream=png_bytes, overlay=True)
+                    except Exception:
+                        pass
+                    try:
+                        tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
+                                         font=font, fontsize=3)
+                    except Exception:
+                        pass
+                else:
+                    # 纯文本 → 矢量文字 + 自动换行
+                    lines: list[str] = block.text.strip().split('\n')
+                    fontsize_txt: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0)
+                    wrapped: list[str] = []
+                    for line in lines:
+                        wrapped.extend(_wrap_line(line, font, fontsize_txt, bbox_width))
+                    for _ in range(20):
+                        if len(wrapped) * fontsize_txt * 1.2 <= bbox_height or fontsize_txt <= 3.0:
+                            break
+                        fontsize_txt *= 0.9
+                        wrapped = []
+                        for line in lines:
+                            wrapped.extend(_wrap_line(line, font, fontsize_txt, bbox_width))
+                    fontsize_txt = max(fontsize_txt, 3.0)
+                    line_height: float = fontsize_txt * 1.2
+                    y: float = pdf_y1 + fontsize_txt * 0.85
+                    for line in wrapped:
+                        if y > pdf_y2:
+                            break
+                        if line.strip():
+                            try:
+                                tw_visible.append((pdf_x1, y), line,
+                                                  font=font, fontsize=fontsize_txt)
+                            except Exception:
+                                pass
+                        y += line_height
+
+            tw_visible.write_text(page, render_mode=0)
+            tw_search.write_text(page, render_mode=3)
+        else:
+            # dual_layer 模式：完全不变
+            tw = _fitz.TextWriter(page.rect)
+            for block in parsed.blocks:
+                if not block.text.strip():
+                    continue
+                pdf_x1 = block.bbox[0] / 999.0 * page.rect.width
+                pdf_y1 = block.bbox[1] / 999.0 * page.rect.height
+                pdf_x2 = block.bbox[2] / 999.0 * page.rect.width
+                pdf_y2 = block.bbox[3] / 999.0 * page.rect.height
+                if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
+                    continue
+                lines = block.text.strip().split('\n')
+                bbox_height = pdf_y2 - pdf_y1
+                fontsize: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 36.0), 3.0)
+                line_height = fontsize * 1.2
+                y = pdf_y1 + fontsize * 0.85
+                for line in lines:
+                    if y > pdf_y2:
+                        break
+                    if line.strip():
+                        try:
+                            tw.append((pdf_x1, y), line, font=font, fontsize=fontsize)
+                        except Exception:
+                            pass
+                    y += line_height
+            tw.write_text(page, render_mode=3)
         # deflate=True：压缩图像流，避免PNG像素流以未压缩形式输出（否则单页~7MB）
         return doc.tobytes(deflate=True, garbage=0)
     finally:
@@ -224,47 +387,116 @@ class DualLayerPDFWriter:
                     color=None, fill=(1, 1, 1), overlay=True,
                 )
 
-        # 4. 用TextWriter写入文字层
-        tw: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
+        # 4. 写入文字层
+        if mode == "rewrite":
+            tw_visible: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
+            tw_search: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
 
-        for block in parsed.blocks:
-            if not block.text.strip():
-                continue
+            for block in parsed.blocks:
+                if not block.text.strip():
+                    continue
+                if block.label in _KEEP_ORIGINAL_LABELS:
+                    continue
 
-            # rewrite模式下，图表/图片/公式保持原始扫描效果
-            if mode == "rewrite" and block.label in _KEEP_ORIGINAL_LABELS:
-                continue
+                pdf_x1: float = block.bbox[0] / 999.0 * page.rect.width
+                pdf_y1: float = block.bbox[1] / 999.0 * page.rect.height
+                pdf_x2: float = block.bbox[2] / 999.0 * page.rect.width
+                pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
 
-            # 坐标转换：归一化(0-999) -> PDF坐标
-            pdf_x1: float = block.bbox[0] / 999.0 * page.rect.width
-            pdf_y1: float = block.bbox[1] / 999.0 * page.rect.height
-            pdf_x2: float = block.bbox[2] / 999.0 * page.rect.width
-            pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
+                if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
+                    logger.debug(f"页 {page_img.page_index}: 跳过无效区域 {block.bbox}")
+                    continue
+                bbox_width: float = pdf_x2 - pdf_x1
+                bbox_height: float = pdf_y2 - pdf_y1
+                block_rect: pymupdf.Rect = pymupdf.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
 
-            rect: pymupdf.Rect = pymupdf.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
-
-            if rect.width <= 0 or rect.height <= 0:
-                logger.debug(f"页 {page_img.page_index}: 跳过无效区域 {block.bbox}")
-                continue
-
-            # 估算字号：根据区域高度和行数计算
-            lines: list[str] = block.text.strip().split('\n')
-            line_count: int = max(len(lines), 1)
-            fontsize: float = max(min(rect.height / line_count * 0.75, 36.0), 3.0)
-
-            # 逐行用 tw.append() 放置，完全避免 fill_textbox 的无限循环 bug
-            line_height: float = fontsize * 1.2
-            y: float = pdf_y1 + fontsize * 0.85  # 首行基线
-            for line in lines:
-                if y > pdf_y2:
-                    break
-                if line.strip():
+                if block.label in ("equation", "formula"):
+                    # 独立公式 → matplotlib 渲染
                     try:
-                        tw.append((pdf_x1, y), line, font=self.font, fontsize=fontsize)
+                        png_bytes: bytes = _render_latex_image(block.text, bbox_width, bbox_height)
+                        page.insert_image(block_rect, stream=png_bytes, overlay=True)
                     except Exception:
                         pass
-                y += line_height
+                    try:
+                        tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
+                                         font=self.font, fontsize=3)
+                    except Exception:
+                        pass
+                elif _contains_latex(block.text):
+                    # 含内联 LaTeX 的文本 → matplotlib 渲染
+                    try:
+                        png_bytes = _render_text_image(block.text, block.label,
+                                                       bbox_width, bbox_height)
+                        page.insert_image(block_rect, stream=png_bytes, overlay=True)
+                    except Exception:
+                        pass
+                    try:
+                        tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
+                                         font=self.font, fontsize=3)
+                    except Exception:
+                        pass
+                else:
+                    # 纯文本 → 矢量文字 + 自动换行
+                    lines: list[str] = block.text.strip().split('\n')
+                    fontsize_txt: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0)
+                    wrapped: list[str] = []
+                    for line in lines:
+                        wrapped.extend(_wrap_line(line, self.font, fontsize_txt, bbox_width))
+                    for _ in range(20):
+                        if len(wrapped) * fontsize_txt * 1.2 <= bbox_height or fontsize_txt <= 3.0:
+                            break
+                        fontsize_txt *= 0.9
+                        wrapped = []
+                        for line in lines:
+                            wrapped.extend(_wrap_line(line, self.font, fontsize_txt, bbox_width))
+                    fontsize_txt = max(fontsize_txt, 3.0)
+                    line_height: float = fontsize_txt * 1.2
+                    y: float = pdf_y1 + fontsize_txt * 0.85
+                    for line in wrapped:
+                        if y > pdf_y2:
+                            break
+                        if line.strip():
+                            try:
+                                tw_visible.append((pdf_x1, y), line,
+                                                  font=self.font, fontsize=fontsize_txt)
+                            except Exception:
+                                pass
+                        y += line_height
 
-        # 5. dual_layer: render_mode=3(不可见), rewrite: render_mode=0(可见)
-        render_mode: int = 0 if mode == "rewrite" else 3
-        tw.write_text(page, render_mode=render_mode)
+            tw_visible.write_text(page, render_mode=0)
+            tw_search.write_text(page, render_mode=3)
+        else:
+            # dual_layer 模式：完全不变
+            tw: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
+
+            for block in parsed.blocks:
+                if not block.text.strip():
+                    continue
+
+                pdf_x1 = block.bbox[0] / 999.0 * page.rect.width
+                pdf_y1 = block.bbox[1] / 999.0 * page.rect.height
+                pdf_x2 = block.bbox[2] / 999.0 * page.rect.width
+                pdf_y2 = block.bbox[3] / 999.0 * page.rect.height
+
+                rect: pymupdf.Rect = pymupdf.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
+
+                if rect.width <= 0 or rect.height <= 0:
+                    logger.debug(f"页 {page_img.page_index}: 跳过无效区域 {block.bbox}")
+                    continue
+
+                lines = block.text.strip().split('\n')
+                bbox_height = pdf_y2 - pdf_y1
+                fontsize: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 36.0), 3.0)
+                line_height = fontsize * 1.2
+                y = pdf_y1 + fontsize * 0.85
+                for line in lines:
+                    if y > pdf_y2:
+                        break
+                    if line.strip():
+                        try:
+                            tw.append((pdf_x1, y), line, font=self.font, fontsize=fontsize)
+                        except Exception:
+                            pass
+                    y += line_height
+
+            tw.write_text(page, render_mode=3)

@@ -24,8 +24,14 @@
 - `tw.write_text(page, render_mode=3)` 不可见文字层(dual_layer) / `render_mode=0` 可见(rewrite)
 - 坐标转换: `pdf_coord = bbox[i] / 999.0 * page_dimension`
 - 页面渲染通过 ProcessPoolExecutor(forkserver) 多进程并行
-- `_KEEP_ORIGINAL_LABELS = {"image", "table", "formula"}`: rewrite模式下保持原始扫描效果的标签
-- rewrite模式：`page.draw_rect(rect, fill=(1,1,1))` 白色遮盖文字区域后重绘矢量文字
+- `_KEEP_ORIGINAL_LABELS = {"image", "table"}`: rewrite模式下保持原始扫描效果的标签
+
+## rewrite 模式三路径渲染
+- `equation`/`formula` 块 → matplotlib mathtext 渲染 LaTeX → PNG 嵌入 + 不可见搜索层
+- 含内联 LaTeX(`\(...\)`) 的文本 → matplotlib 混合渲染 → PNG 嵌入 + 不可见搜索层
+- 纯文本 → `tw.append()` 矢量文字 + `_wrap_line()` 自动换行
+- 两个 TextWriter：`tw_visible`(render_mode=0) + `tw_search`(render_mode=3)
+- matplotlib 使用 Agg 后端，子进程安全
 
 ## 降级策略
 OCR输出无坐标标签时 → 整页文本作为单个TextBlock(bbox=[0,0,999,999])
