@@ -53,19 +53,22 @@ def _render_page_worker(args: tuple[PageImage, ParsedPage]) -> bytes:
             pdf_y1: float = block.bbox[1] / 999.0 * page.rect.height
             pdf_x2: float = block.bbox[2] / 999.0 * page.rect.width
             pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
-            rect = _fitz.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
-            if rect.width <= 0 or rect.height <= 0:
+            if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
                 continue
             lines: list[str] = block.text.strip().split('\n')
-            fontsize: float = max(min(rect.height / max(len(lines), 1) * 0.75, 36.0), 3.0)
-            try:
-                tw.fill_textbox(rect, block.text, font=font, fontsize=fontsize)
-            except Exception:
-                try:
-                    tw.fill_textbox(rect, block.text, font=font,
-                                    fontsize=max(fontsize * 0.5, 3.0))
-                except Exception:
-                    pass
+            fontsize: float = max(min((pdf_y2 - pdf_y1) / max(len(lines), 1) * 0.75, 36.0), 3.0)
+            # 逐行用 tw.append() 放置，完全避免 fill_textbox 的无限循环 bug
+            line_height: float = fontsize * 1.2
+            y: float = pdf_y1 + fontsize * 0.85  # 首行基线
+            for line in lines:
+                if y > pdf_y2:
+                    break
+                if line.strip():
+                    try:
+                        tw.append((pdf_x1, y), line, font=font, fontsize=fontsize)
+                    except Exception:
+                        pass
+                y += line_height
         tw.write_text(page, render_mode=3)
         # deflate=True：压缩图像流，避免PNG像素流以未压缩形式输出（否则单页~7MB）
         return doc.tobytes(deflate=True, garbage=0)
@@ -196,33 +199,18 @@ class DualLayerPDFWriter:
             line_count: int = max(len(lines), 1)
             fontsize: float = max(min(rect.height / line_count * 0.75, 36.0), 3.0)
 
-            try:
-                # fill_textbox自动换行填充文本到指定区域
-                tw.fill_textbox(
-                    rect,
-                    block.text,
-                    font=self.font,
-                    fontsize=fontsize,
-                )
-            except Exception as e:
-                # fill_textbox可能因文字过多超出rect而抛异常
-                logger.debug(
-                    f"页 {page_img.page_index}: fill_textbox异常 (block label={block.label}): {e}, "
-                    f"尝试缩小字号"
-                )
-                # 缩小字号重试
-                try:
-                    smaller_fontsize: float = max(fontsize * 0.5, 3.0)
-                    tw.fill_textbox(
-                        rect,
-                        block.text,
-                        font=self.font,
-                        fontsize=smaller_fontsize,
-                    )
-                except Exception as e2:
-                    logger.warning(
-                        f"页 {page_img.page_index}: fill_textbox再次失败: {e2}, 跳过此block"
-                    )
+            # 逐行用 tw.append() 放置，完全避免 fill_textbox 的无限循环 bug
+            line_height: float = fontsize * 1.2
+            y: float = pdf_y1 + fontsize * 0.85  # 首行基线
+            for line in lines:
+                if y > pdf_y2:
+                    break
+                if line.strip():
+                    try:
+                        tw.append((pdf_x1, y), line, font=self.font, fontsize=fontsize)
+                    except Exception:
+                        pass
+                y += line_height
 
         # 4. render_mode=3 -> 不可见文字（可搜索但不显示）
         tw.write_text(page, render_mode=3)
