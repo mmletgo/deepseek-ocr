@@ -25,7 +25,29 @@ from deepseek_ocr.core.pdf_reader import PageImage
 from deepseek_ocr.core.output_parser import ParsedPage
 from deepseek_ocr.utils.logger import logger
 
-_KEEP_ORIGINAL_LABELS: frozenset[str] = frozenset({"image", "table", "formula"})
+_KEEP_ORIGINAL_LABELS: frozenset[str] = frozenset({"image", "table", "formula", "equation"})
+
+
+def _wrap_line(line: str, font: object, fontsize: float, max_width: float) -> list[str]:
+    """将单行文本按 bbox 宽度折行（按单词边界），返回多个子行。"""
+    if not line.strip():
+        return [line]
+    if font.text_length(line, fontsize=fontsize) <= max_width:
+        return [line]
+    words: list[str] = line.split()
+    wrapped: list[str] = []
+    current: str = ""
+    for word in words:
+        test: str = (current + " " + word).strip()
+        if font.text_length(test, fontsize=fontsize) <= max_width:
+            current = test
+        else:
+            if current:
+                wrapped.append(current)
+            current = word
+    if current:
+        wrapped.append(current)
+    return wrapped if wrapped else [line]
 
 
 def _render_page_worker(args: tuple[PageImage, ParsedPage, str]) -> bytes:
@@ -82,8 +104,29 @@ def _render_page_worker(args: tuple[PageImage, ParsedPage, str]) -> bytes:
             if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
                 continue
             lines: list[str] = block.text.strip().split('\n')
-            fontsize: float = max(min((pdf_y2 - pdf_y1) / max(len(lines), 1) * 0.75, 36.0), 3.0)
-            # 逐行用 tw.append() 放置，完全避免 fill_textbox 的无限循环 bug
+            bbox_width: float = pdf_x2 - pdf_x1
+            bbox_height: float = pdf_y2 - pdf_y1
+
+            if mode == "rewrite":
+                # rewrite 模式：先折行再计算字号
+                fontsize: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0)
+                wrapped: list[str] = []
+                for line in lines:
+                    wrapped.extend(_wrap_line(line, font, fontsize, bbox_width))
+                # 折行后总高度超出 bbox 则缩小字号并重新折行
+                for _ in range(20):
+                    if len(wrapped) * fontsize * 1.2 <= bbox_height or fontsize <= 3.0:
+                        break
+                    fontsize *= 0.9
+                    wrapped = []
+                    for line in lines:
+                        wrapped.extend(_wrap_line(line, font, fontsize, bbox_width))
+                fontsize = max(fontsize, 3.0)
+                lines = wrapped
+            else:
+                fontsize = max(min(bbox_height / max(len(lines), 1) * 0.75, 36.0), 3.0)
+
+            # 逐行用 tw.append() 放置
             line_height: float = fontsize * 1.2
             y: float = pdf_y1 + fontsize * 0.85  # 首行基线
             for line in lines:
@@ -247,12 +290,29 @@ class DualLayerPDFWriter:
                 logger.debug(f"页 {page_img.page_index}: 跳过无效区域 {block.bbox}")
                 continue
 
-            # 估算字号：根据区域高度和行数计算
             lines: list[str] = block.text.strip().split('\n')
-            line_count: int = max(len(lines), 1)
-            fontsize: float = max(min(rect.height / line_count * 0.75, 36.0), 3.0)
 
-            # 逐行用 tw.append() 放置，完全避免 fill_textbox 的无限循环 bug
+            if mode == "rewrite":
+                # rewrite 模式：先折行再计算字号
+                fontsize: float = max(min(rect.height / max(len(lines), 1) * 0.75, 14.0), 3.0)
+                wrapped: list[str] = []
+                for line in lines:
+                    wrapped.extend(_wrap_line(line, self.font, fontsize, rect.width))
+                # 折行后总高度超出 bbox 则缩小字号并重新折行
+                for _ in range(20):
+                    if len(wrapped) * fontsize * 1.2 <= rect.height or fontsize <= 3.0:
+                        break
+                    fontsize *= 0.9
+                    wrapped = []
+                    for line in lines:
+                        wrapped.extend(_wrap_line(line, self.font, fontsize, rect.width))
+                fontsize = max(fontsize, 3.0)
+                lines = wrapped
+            else:
+                line_count: int = max(len(lines), 1)
+                fontsize = max(min(rect.height / line_count * 0.75, 36.0), 3.0)
+
+            # 逐行用 tw.append() 放置
             line_height: float = fontsize * 1.2
             y: float = pdf_y1 + fontsize * 0.85  # 首行基线
             for line in lines:
