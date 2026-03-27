@@ -29,7 +29,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from deepseek_ocr.config import AppConfig, OllamaConfig, PDFConfig, WebConfig
+from deepseek_ocr.config import AppConfig, OllamaConfig, PDFConfig, PDFOutputMode, WebConfig
 from deepseek_ocr.core.pipeline import ConversionPipeline, ConversionResult
 from deepseek_ocr.core.ocr_engine import OCREngine
 from deepseek_ocr.utils.logger import logger
@@ -89,6 +89,7 @@ def cli() -> None:
 @click.option("--no-markdown", "no_markdown", is_flag=True, default=False, help="不生成Markdown")
 @click.option("--model", default="deepseek-ocr", help="Ollama模型名称，默认 deepseek-ocr")
 @click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
+@click.option("--pdf-mode", "pdf_mode", type=click.Choice(["dual_layer", "rewrite"], case_sensitive=False), default="dual_layer", help="PDF输出模式: dual_layer(双层) / rewrite(重绘)")
 def convert(
     input_path: str,
     output_dir: str,
@@ -97,6 +98,7 @@ def convert(
     no_markdown: bool,
     model: str,
     ollama_host: str,
+    pdf_mode: str,
 ) -> None:
     """
     Business Logic:
@@ -125,7 +127,7 @@ def convert(
 
     config = AppConfig(
         ollama=OllamaConfig(host=ollama_host, model=model),
-        pdf=PDFConfig(dpi=dpi),
+        pdf=PDFConfig(dpi=dpi, output_mode=PDFOutputMode(pdf_mode)),
         output_dir=str(resolved_output),
     )
 
@@ -137,7 +139,8 @@ def convert(
             f"[bold]DPI:[/bold] {dpi}    "
             f"[bold]模型:[/bold] {model}\n"
             f"[bold]生成PDF:[/bold] {'是' if generate_pdf else '否'}    "
-            f"[bold]生成Markdown:[/bold] {'是' if generate_markdown else '否'}",
+            f"[bold]生成Markdown:[/bold] {'是' if generate_markdown else '否'}    "
+            f"[bold]PDF模式:[/bold] {pdf_mode}",
             title="[bold cyan]DeepSeek-OCR 转换任务[/bold cyan]",
             border_style="cyan",
         )

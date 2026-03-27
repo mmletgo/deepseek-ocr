@@ -17,7 +17,7 @@ Code Logic:
     - 支持断点续传：已缓存的页直接跳过OCR
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 import asyncio
@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 from typing import Any, List
 
-from deepseek_ocr.config import AppConfig
+from deepseek_ocr.config import AppConfig, PDFOutputMode
 from deepseek_ocr.utils.logger import logger
 
 router = APIRouter()
@@ -77,7 +77,10 @@ async def index() -> HTMLResponse:
 
 
 @router.post("/api/upload")
-async def upload_pdf(files: List[UploadFile] = File(...)) -> list[dict[str, str]]:
+async def upload_pdf(
+    files: List[UploadFile] = File(...),
+    pdf_mode: str = Form("dual_layer"),
+) -> list[dict[str, str]]:
     """
     Business Logic:
         用户上传一个或多个PDF文件后，系统保存文件并为每个文件启动异步OCR任务，
@@ -91,6 +94,10 @@ async def upload_pdf(files: List[UploadFile] = File(...)) -> list[dict[str, str]
         4. 初始化任务状态并启动后台转换任务
         5. 收集并返回所有 {task_id, filename}
     """
+    # 验证pdf_mode
+    if pdf_mode not in ("dual_layer", "rewrite"):
+        raise HTTPException(status_code=400, detail=f"Invalid pdf_mode: {pdf_mode}")
+
     results: list[dict[str, str]] = []
 
     for file in files:
@@ -140,6 +147,7 @@ async def upload_pdf(files: List[UploadFile] = File(...)) -> list[dict[str, str]
             "result_markdown": None,
             "filename": file.filename,
             "pdf_md5": None,
+            "pdf_mode": pdf_mode,
         }
 
         # 启动后台转换任务
@@ -183,6 +191,7 @@ async def _run_conversion(task_id: str) -> None:
         from deepseek_ocr.core.markdown_writer import MarkdownWriter
         from deepseek_ocr.core.ocr_cache import OCRCache
 
+        pdf_mode: str = task.get("pdf_mode", "dual_layer")
         config = AppConfig()
         loop = asyncio.get_event_loop()
 
@@ -308,6 +317,7 @@ async def _run_conversion(task_id: str) -> None:
                 page_images,
                 parsed_pages,
                 output_pdf_path,
+                pdf_mode,
             )
 
         task["result_pdf"] = str(output_pdf_path)

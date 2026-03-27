@@ -8,7 +8,14 @@ Code Logic:
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 import os
+
+
+class PDFOutputMode(StrEnum):
+    """PDF输出模式"""
+    DUAL_LAYER = "dual_layer"
+    REWRITE = "rewrite"
 
 
 @dataclass
@@ -26,6 +33,7 @@ class PDFConfig:
     dpi: int = 200
     max_dimension: int = 1920
     image_format: str = "png"
+    output_mode: PDFOutputMode = PDFOutputMode.DUAL_LAYER
 
 
 @dataclass

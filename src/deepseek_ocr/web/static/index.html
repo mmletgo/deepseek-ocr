@@ -21,6 +21,22 @@
                 <span class="upload-icon" aria-hidden="true">&#128196;</span>
                 <h3>Drag and drop your PDF here</h3>
                 <p>or click to select a file</p>
+                <div class="mode-selector" id="modeSelector">
+                    <label class="mode-option">
+                        <input type="radio" name="pdfMode" value="dual_layer" checked>
+                        <span class="mode-label">
+                            <span class="mode-title">Dual Layer</span>
+                            <span class="mode-desc">Invisible text, original scan look</span>
+                        </span>
+                    </label>
+                    <label class="mode-option">
+                        <input type="radio" name="pdfMode" value="rewrite">
+                        <span class="mode-label">
+                            <span class="mode-title">Rewrite</span>
+                            <span class="mode-desc">Vector font, clearer text</span>
+                        </span>
+                    </label>
+                </div>
                 <button type="button" class="upload-btn" id="uploadBtn">Select PDF File</button>
                 <input type="file" class="file-input" id="fileInput" accept=".pdf,application/pdf" multiple>
             </section>

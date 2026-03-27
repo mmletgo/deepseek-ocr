@@ -120,6 +120,8 @@
         pdfFiles.forEach(function (f) {
             formData.append("files", f);   // 字段名 "files"（复数）
         });
+        var modeRadio = document.querySelector('input[name="pdfMode"]:checked');
+        formData.append("pdf_mode", modeRadio ? modeRadio.value : "dual_layer");
 
         try {
             var response = await fetch("/api/upload", {
