@@ -60,6 +60,104 @@ def _contains_latex(text: str) -> bool:
     return r'\(' in text or r'\)' in text or r'\[' in text or r'\]' in text
 
 
+import re as _re
+
+_MD_HEADING_RE = _re.compile(r'^#{1,6}\s+')
+
+
+def _clean_markdown(text: str) -> str:
+    """清理 Markdown 格式标记，返回适合矢量文字渲染的纯文本。"""
+    lines: list[str] = text.split('\n')
+    cleaned: list[str] = []
+    for line in lines:
+        # 去掉 Markdown 标题标记 (####)
+        line = _MD_HEADING_RE.sub('', line)
+        cleaned.append(line)
+    return '\n'.join(cleaned)
+
+
+def _strip_latex(text: str) -> str:
+    """去掉 LaTeX 分隔符，返回可读纯文本（matplotlib 回退用）。"""
+    result: str = text
+    result = result.replace(r'\[', '').replace(r'\]', '')
+    result = result.replace(r'\(', '').replace(r'\)', '')
+    return result
+
+
+_ARRAY_ENV_RE = _re.compile(
+    r'\\left\s*[\[\(]?\s*\\begin\{array\}\{[^}]*\}(.*?)\\end\{array\}\s*\\right\s*[\]\).]?'
+    r'|\\begin\{array\}\{[^}]*\}(.*?)\\end\{array\}',
+    _re.DOTALL,
+)
+_CASES_ENV_RE = _re.compile(
+    r'\\left\s*[\\\{]?\s*\\begin\{cases\}(.*?)\\end\{cases\}\s*\\right\s*[\\\}.]?'
+    r'|\\begin\{cases\}(.*?)\\end\{cases\}',
+    _re.DOTALL,
+)
+
+
+def _sanitize_latex(text: str) -> str:
+    """预处理 LaTeX，替换 mathtext 不支持的命令。"""
+    s: str = text
+    # \left[\begin{array}{cc}...\end{array}\right] → 保留内容
+    s = _ARRAY_ENV_RE.sub(lambda m: m.group(1) or m.group(2) or '', s)
+    s = _CASES_ENV_RE.sub(lambda m: m.group(1) or m.group(2) or '', s)
+    # 清理遗留的 \begin{array/bmatrix/cases}
+    s = _re.sub(r'\\begin\{(?:array|bmatrix|pmatrix|vmatrix)\}\{[^}]*\}', '', s)
+    s = _re.sub(r'\\begin\{(?:array|bmatrix|pmatrix|vmatrix|cases)\}', '', s)
+    s = _re.sub(r'\\end\{(?:array|bmatrix|pmatrix|vmatrix|cases)\}', '', s)
+    # 清理 array/matrix 残留: & → 空格, \\ → 空格
+    s = s.replace('&', ' ')
+    s = s.replace(r'\\', ' ')
+    # \Big \bigg \Bigg → 移除
+    s = _re.sub(r'\\[Bb]ig{1,2}[lr]?\b', '', s)
+    # \left\{ → \{, \right. → 移除, \left\ → 移除
+    s = _re.sub(r'\\left\s*\\{', r'\\{', s)
+    s = _re.sub(r'\\left\s*\\(?=[^a-zA-Z{])', '', s)
+    s = _re.sub(r'\\right\s*\\.?', '', s)
+    # \operatorname * → \operatorname (带或不带空格)
+    s = _re.sub(r'\\operatorname\s*\*', r'\\operatorname', s)
+    # \text{} → \mathrm{}
+    s = s.replace(r'\text{', r'\mathrm{')
+    # \mathbf 无花括号 → 移除
+    s = _re.sub(r'\\mathbf\s*(?=\s|=|[^{])', '', s)
+    # \scriptstyle \displaystyle \textstyle → 移除
+    for cmd in (r'\scriptstyle', r'\displaystyle', r'\textstyle'):
+        s = s.replace(cmd, '')
+    # \mod → \bmod
+    s = s.replace(r'\mod', r'\bmod')
+    # \hfill → 空格
+    s = s.replace(r'\hfill', ' ')
+    # 空公式块
+    s = s.replace(r'\[\]', '')
+    # 自动补全未闭合的 {} (OCR 截断修复)
+    open_count: int = s.count('{') - s.count('}')
+    if open_count > 0:
+        s += '}' * open_count
+    # 清理多余空格
+    s = _re.sub(r'\s+', ' ', s)
+    return s
+
+
+def _escape_literal_dollars(text: str) -> str:
+    """转义文本中非 LaTeX 分隔符的 $ 字符（如货币符号 $100）。"""
+    # 找到不在 \(...\) 或 \[...\] 内部的孤立 $ 字符
+    # 策略：先标记所有 \( \) \[ \] 的位置，然后转义其余 $
+    result: list[str] = []
+    i: int = 0
+    while i < len(text):
+        if text[i:i+2] in (r'\(', r'\)', r'\[', r'\]'):
+            result.append(text[i:i+2])
+            i += 2
+        elif text[i] == '$':
+            result.append(r'\$')
+            i += 1
+        else:
+            result.append(text[i])
+            i += 1
+    return ''.join(result)
+
+
 def _render_latex_image(latex: str, width_pt: float, height_pt: float, dpi: int = 200) -> bytes:
     """渲染 LaTeX 公式为 PNG 图片（用于 equation/formula 块）。"""
     import matplotlib
@@ -67,12 +165,14 @@ def _render_latex_image(latex: str, width_pt: float, height_pt: float, dpi: int 
     import matplotlib.pyplot as plt
     from io import BytesIO
 
-    # 清理 LaTeX：去掉 \[ \] 包裹，转为 matplotlib 内联数学格式
-    text: str = latex.strip()
+    # 预处理 + 转换分隔符
+    text: str = _sanitize_latex(latex.strip())
+    # 先转义原有的 $ 货币符号，避免与 LaTeX 分隔符冲突
+    text = _escape_literal_dollars(text)
     text = text.replace(r'\[', '$').replace(r'\]', '$')
     text = text.replace(r'\(', '$').replace(r'\)', '$')
-    if '$' not in text:
-        text = '$' + text + '$'
+    if '$' not in text or text.replace('$', '').strip() == '':
+        raise ValueError("Empty LaTeX after sanitization")
 
     fig_w: float = max(width_pt / 72.0, 0.5)
     fig_h: float = max(height_pt / 72.0, 0.3)
@@ -95,8 +195,11 @@ def _render_text_image(text: str, label: str, width_pt: float, height_pt: float,
     import matplotlib.pyplot as plt
     from io import BytesIO
 
-    # 将 LaTeX 分隔符转为 matplotlib 格式
-    converted: str = text.replace(r'\(', '$').replace(r'\)', '$')
+    # 预处理 + 将 LaTeX 分隔符转为 matplotlib 格式
+    converted: str = _sanitize_latex(text)
+    # 先转义原有的 $ 货币符号，避免与 LaTeX 分隔符冲突
+    converted = _escape_literal_dollars(converted)
+    converted = converted.replace(r'\(', '$').replace(r'\)', '$')
     converted = converted.replace(r'\[', '$').replace(r'\]', '$')
 
     fig_w: float = max(width_pt / 72.0, 0.5)
@@ -141,24 +244,7 @@ def _render_page_worker(args: tuple[PageImage, ParsedPage, str]) -> bytes:
         )
         page.insert_image(page.rect, stream=page_img.image_bytes, overlay=False)
 
-        # rewrite 模式：白色矩形遮盖文字区域
-        if mode == "rewrite":
-            for block in parsed.blocks:
-                if not block.text.strip():
-                    continue
-                if block.label in _KEEP_ORIGINAL_LABELS:
-                    continue
-                r_x1: float = block.bbox[0] / 999.0 * page.rect.width
-                r_y1: float = block.bbox[1] / 999.0 * page.rect.height
-                r_x2: float = block.bbox[2] / 999.0 * page.rect.width
-                r_y2: float = block.bbox[3] / 999.0 * page.rect.height
-                if r_x2 <= r_x1 or r_y2 <= r_y1:
-                    continue
-                page.draw_rect(
-                    _fitz.Rect(r_x1, r_y1, r_x2, r_y2),
-                    color=None, fill=(1, 1, 1), overlay=True,
-                )
-
+        # rewrite 模式：按块决定渲染方式（不预先全部白色遮盖）
         if mode == "rewrite":
             tw_visible = _fitz.TextWriter(page.rect)
             tw_search = _fitz.TextWriter(page.rect)
@@ -179,34 +265,61 @@ def _render_page_worker(args: tuple[PageImage, ParsedPage, str]) -> bytes:
                 block_rect = _fitz.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
 
                 if block.label in ("equation", "formula"):
-                    # 独立公式 → matplotlib 渲染
+                    # 独立公式 → matplotlib 渲染，失败则保留原始扫描
                     try:
                         png_bytes: bytes = _render_latex_image(block.text, bbox_width, bbox_height)
+                        page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
                         page.insert_image(block_rect, stream=png_bytes, overlay=True)
                     except Exception:
-                        pass  # 渲染失败时跳过（保留白色背景）
-                    # 不可见搜索层
+                        pass  # 不遮盖，保留原始扫描
                     try:
                         tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
                                          font=font, fontsize=3)
                     except Exception:
                         pass
                 elif _contains_latex(block.text):
-                    # 含内联 LaTeX 的文本 → matplotlib 渲染
+                    # 含内联 LaTeX → matplotlib 渲染，失败则白色遮盖 + OCR 原文回退
                     try:
                         png_bytes = _render_text_image(block.text, block.label,
                                                        bbox_width, bbox_height)
+                        page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
                         page.insert_image(block_rect, stream=png_bytes, overlay=True)
+                        try:
+                            tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
+                                             font=font, fontsize=3)
+                        except Exception:
+                            pass
                     except Exception:
-                        pass
-                    try:
-                        tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
-                                         font=font, fontsize=3)
-                    except Exception:
-                        pass
+                        # 回退：白色遮盖 + OCR 原始文本（不去 LaTeX 标记）
+                        page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
+                        fallback_lines: list[str] = block.text.strip().split('\n')
+                        fs: float = max(min(bbox_height / max(len(fallback_lines), 1) * 0.75, 14.0), 3.0)
+                        wrapped_fb: list[str] = []
+                        for ln in fallback_lines:
+                            wrapped_fb.extend(_wrap_line(ln, font, fs, bbox_width))
+                        for _ in range(20):
+                            if len(wrapped_fb) * fs * 1.2 <= bbox_height or fs <= 3.0:
+                                break
+                            fs *= 0.9
+                            wrapped_fb = []
+                            for ln in fallback_lines:
+                                wrapped_fb.extend(_wrap_line(ln, font, fs, bbox_width))
+                        fs = max(fs, 3.0)
+                        y_fb: float = pdf_y1 + fs * 0.85
+                        for ln in wrapped_fb:
+                            if y_fb > pdf_y2:
+                                break
+                            if ln.strip():
+                                try:
+                                    tw_visible.append((pdf_x1, y_fb), ln, font=font, fontsize=fs)
+                                except Exception:
+                                    pass
+                            y_fb += fs * 1.2
                 else:
-                    # 纯文本 → 矢量文字 + 自动换行
-                    lines: list[str] = block.text.strip().split('\n')
+                    # 纯文本 → 白色遮盖 + 矢量文字 + 自动换行
+                    page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
+                    clean_text: str = _clean_markdown(block.text.strip())
+                    lines: list[str] = clean_text.split('\n')
                     fontsize_txt: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0)
                     wrapped: list[str] = []
                     for line in lines:
@@ -369,25 +482,7 @@ class DualLayerPDFWriter:
             overlay=False,
         )
 
-        # 3. rewrite模式：白色矩形遮盖文字区域
-        if mode == "rewrite":
-            for block in parsed.blocks:
-                if not block.text.strip():
-                    continue
-                if block.label in _KEEP_ORIGINAL_LABELS:
-                    continue
-                r_x1: float = block.bbox[0] / 999.0 * page.rect.width
-                r_y1: float = block.bbox[1] / 999.0 * page.rect.height
-                r_x2: float = block.bbox[2] / 999.0 * page.rect.width
-                r_y2: float = block.bbox[3] / 999.0 * page.rect.height
-                if r_x2 <= r_x1 or r_y2 <= r_y1:
-                    continue
-                page.draw_rect(
-                    pymupdf.Rect(r_x1, r_y1, r_x2, r_y2),
-                    color=None, fill=(1, 1, 1), overlay=True,
-                )
-
-        # 4. 写入文字层
+        # 3+4. rewrite模式：按块决定渲染方式
         if mode == "rewrite":
             tw_visible: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
             tw_search: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
@@ -404,40 +499,66 @@ class DualLayerPDFWriter:
                 pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
 
                 if pdf_x2 <= pdf_x1 or pdf_y2 <= pdf_y1:
-                    logger.debug(f"页 {page_img.page_index}: 跳过无效区域 {block.bbox}")
                     continue
                 bbox_width: float = pdf_x2 - pdf_x1
                 bbox_height: float = pdf_y2 - pdf_y1
                 block_rect: pymupdf.Rect = pymupdf.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
 
                 if block.label in ("equation", "formula"):
-                    # 独立公式 → matplotlib 渲染
+                    # 独立公式：成功→遮盖+渲染，失败→保留原始扫描
                     try:
                         png_bytes: bytes = _render_latex_image(block.text, bbox_width, bbox_height)
+                        page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
                         page.insert_image(block_rect, stream=png_bytes, overlay=True)
                     except Exception:
-                        pass
+                        pass  # 保留原始扫描
                     try:
                         tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
                                          font=self.font, fontsize=3)
                     except Exception:
                         pass
                 elif _contains_latex(block.text):
-                    # 含内联 LaTeX 的文本 → matplotlib 渲染
+                    # 含内联 LaTeX：成功→遮盖+渲染，失败→遮盖+OCR原文回退
                     try:
                         png_bytes = _render_text_image(block.text, block.label,
                                                        bbox_width, bbox_height)
+                        page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
                         page.insert_image(block_rect, stream=png_bytes, overlay=True)
+                        try:
+                            tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
+                                             font=self.font, fontsize=3)
+                        except Exception:
+                            pass
                     except Exception:
-                        pass
-                    try:
-                        tw_search.append((pdf_x1, pdf_y1 + 10), block.text[:200],
-                                         font=self.font, fontsize=3)
-                    except Exception:
-                        pass
+                        page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
+                        fb_lines: list[str] = block.text.strip().split('\n')
+                        fs: float = max(min(bbox_height / max(len(fb_lines), 1) * 0.75, 14.0), 3.0)
+                        wr: list[str] = []
+                        for ln in fb_lines:
+                            wr.extend(_wrap_line(ln, self.font, fs, bbox_width))
+                        for _ in range(20):
+                            if len(wr) * fs * 1.2 <= bbox_height or fs <= 3.0:
+                                break
+                            fs *= 0.9
+                            wr = []
+                            for ln in fb_lines:
+                                wr.extend(_wrap_line(ln, self.font, fs, bbox_width))
+                        fs = max(fs, 3.0)
+                        y_fb: float = pdf_y1 + fs * 0.85
+                        for ln in wr:
+                            if y_fb > pdf_y2:
+                                break
+                            if ln.strip():
+                                try:
+                                    tw_visible.append((pdf_x1, y_fb), ln, font=self.font, fontsize=fs)
+                                except Exception:
+                                    pass
+                            y_fb += fs * 1.2
                 else:
-                    # 纯文本 → 矢量文字 + 自动换行
-                    lines: list[str] = block.text.strip().split('\n')
+                    # 纯文本 → 白色遮盖 + 矢量文字 + 自动换行
+                    page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
+                    clean_text: str = _clean_markdown(block.text.strip())
+                    lines: list[str] = clean_text.split('\n')
                     fontsize_txt: float = max(min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0)
                     wrapped: list[str] = []
                     for line in lines:
