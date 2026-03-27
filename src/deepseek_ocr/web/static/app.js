@@ -34,6 +34,19 @@
     const healthDot = document.getElementById("healthDot");
     const healthText = document.getElementById("healthText");
 
+    // --- 阶段标签映射（phase -> 显示文本）---
+    const PHASE_LABELS = {
+        queued: "Queued",
+        reading: "Reading PDF",
+        waiting_ocr: "Waiting for GPU",
+        ocr: "Running OCR",
+        parsing: "Parsing results",
+        waiting_generate: "Waiting to generate",
+        generating: "Generating PDF",
+        markdown: "Generating Markdown",
+        completed: "Completed",
+    };
+
     // --- 状态变量 ---
     let currentTaskId = null;
     let eventSource = null;

@@ -45,26 +45,54 @@ class DualLayerPDFWriter:
             生成的PDF外观与原始扫描PDF一致，但文字可搜索和复制。
 
         Code Logic:
-            创建空PDF文档，遍历每页图像和解析结果，
-            调用_add_page逐页添加双层内容，最后保存到指定路径。
-            使用deflate压缩和garbage=4优化文件大小。
+            顺序处理每页：先用 _render_page_to_bytes 将单页渲染为 PDF bytes，
+            再通过 insert_pdf 合并到最终文档中。
+            PyMuPDF 持有 Python GIL，使用 ThreadPoolExecutor 无法真正并行，
+            因此直接顺序循环处理，避免多线程争抢 GIL 的额外开销。
+            最终保存使用 deflate=False, garbage=1 保持轻量。
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"开始生成双层PDF: {output_path}, 共 {len(page_images)} 页")
-        doc: pymupdf.Document = pymupdf.open()
 
+        # 直接顺序处理（PyMuPDF 持有 GIL，ThreadPoolExecutor 无法真正并行）
+        final_doc: pymupdf.Document = pymupdf.open()
         try:
             for page_img, parsed in zip(page_images, parsed_pages):
-                self._add_page(doc, page_img, parsed)
+                page_bytes: bytes = self._render_page_to_bytes(page_img, parsed)
+                src: pymupdf.Document = pymupdf.open("pdf", page_bytes)
+                final_doc.insert_pdf(src)
+                src.close()
 
-            doc.save(str(output_path), deflate=True, garbage=4)
+            final_doc.save(str(output_path), deflate=False, garbage=1)
             logger.info(f"双层PDF生成完成: {output_path}")
         finally:
-            doc.close()
+            final_doc.close()
 
         return output_path
+
+    def _render_page_to_bytes(
+        self,
+        page_img: PageImage,
+        parsed: ParsedPage,
+    ) -> bytes:
+        """
+        Business Logic:
+            将单页图像和OCR文本渲染为单页 PDF 的字节流。
+            用于逐页独立生成，便于顺序合并到最终文档。
+
+        Code Logic:
+            创建单页 PDF 文档，调用 _add_page 写入图像和文字层，
+            使用 tobytes 导出为内存字节，最后关闭临时文档。
+        """
+        page_doc: pymupdf.Document = pymupdf.open()
+        try:
+            self._add_page(page_doc, page_img, parsed)
+            result: bytes = page_doc.tobytes(deflate=False)
+        finally:
+            page_doc.close()
+        return result
 
     def _add_page(
         self,

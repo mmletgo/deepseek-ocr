@@ -7,6 +7,14 @@ Code Logic:
     使用FastAPI APIRouter管理路由。上传后启动异步后台任务执行转换，
     通过SSE(Server-Sent Events)实时推送转换进度，支持结果文件下载。
     任务状态通过内存字典管理。
+
+    并发控制：
+    - _ocr_semaphore: Semaphore(1) 串行化GPU OCR步骤，避免显存溢出
+    - _generating_semaphore: Semaphore(1) 串行化PDF生成步骤，避免PyMuPDF GIL争用
+
+    OCR缓存：
+    - 以PDF的MD5哈希为key，每页OCR结果持久化到 uploads/ocr_cache/{md5}/page_NNNN.json
+    - 支持断点续传：已缓存的页直接跳过OCR
 """
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
@@ -28,6 +36,28 @@ tasks: dict[str, dict[str, Any]] = {}
 
 # 全局配置
 _config = AppConfig()
+
+# 全局 OCR GPU 串行锁（同一时刻只允许一个任务使用GPU）
+_ocr_semaphore: asyncio.Semaphore | None = None
+
+# 全局 PDF 生成串行锁（避免PyMuPDF GIL争用）
+_generating_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_ocr_semaphore() -> asyncio.Semaphore:
+    """获取或创建 OCR 串行信号量（懒初始化，确保在事件循环中创建）"""
+    global _ocr_semaphore
+    if _ocr_semaphore is None:
+        _ocr_semaphore = asyncio.Semaphore(1)
+    return _ocr_semaphore
+
+
+def _get_generating_semaphore() -> asyncio.Semaphore:
+    """获取或创建 PDF 生成串行信号量（懒初始化，确保在事件循环中创建）"""
+    global _generating_semaphore
+    if _generating_semaphore is None:
+        _generating_semaphore = asyncio.Semaphore(1)
+    return _generating_semaphore
 
 
 @router.get("/")
@@ -94,6 +124,7 @@ async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
     # 初始化任务状态
     tasks[task_id] = {
         "status": "queued",
+        "phase": "queued",
         "current": 0,
         "total": 0,
         "message": "Waiting to start...",
@@ -104,6 +135,7 @@ async def upload_pdf(file: UploadFile = File(...)) -> dict[str, str]:
         "result_pdf": None,
         "result_markdown": None,
         "filename": file.filename,
+        "pdf_md5": None,
     }
 
     # 启动后台转换任务
@@ -118,55 +150,181 @@ async def _run_conversion(task_id: str) -> None:
     """
     Business Logic:
         后台执行PDF OCR转换，实时更新任务进度供SSE推送。
+        支持OCR结果持久化缓存和断点续传。
 
     Code Logic:
-        使用ConversionPipeline的异步接口执行转换，通过进度回调更新tasks字典。
-        转换完成后记录结果文件路径，出错时记录错误信息。
+        展开转换步骤（不再使用pipeline.convert_async），以便精确控制并发：
+        1. 读取PDF，渲染为图片
+        2. 计算PDF MD5，初始化OCR缓存
+        3. 等待OCR信号量，逐页OCR（缓存命中则跳过）
+        4. 解析OCR结果
+        5. 等待生成信号量，生成双层PDF
+        6. 生成Markdown（在生成信号量外执行）
     """
-    task = tasks.get(task_id)
+    task: dict[str, Any] | None = tasks.get(task_id)
     if task is None:
         return
 
     task["status"] = "running"
     task["message"] = "Initializing..."
 
-    def progress_callback(current: int, total: int, message: str) -> None:
-        """进度回调，更新任务状态"""
-        if task_id in tasks:
-            tasks[task_id]["current"] = current
-            tasks[task_id]["total"] = total
-            tasks[task_id]["message"] = message
-
     try:
-        from deepseek_ocr.core.pipeline import ConversionPipeline
+        import time
+        from deepseek_ocr.core.pdf_reader import PDFReader, PageImage
+        from deepseek_ocr.core.ocr_engine import OCREngine, OCRResult
+        from deepseek_ocr.core.output_parser import OutputParser, ParsedPage
+        from deepseek_ocr.core.pdf_writer import DualLayerPDFWriter
+        from deepseek_ocr.core.markdown_writer import MarkdownWriter
+        from deepseek_ocr.core.ocr_cache import OCRCache
 
         config = AppConfig()
-        pipeline = ConversionPipeline(
-            config=config,
-            progress_callback=progress_callback,
+        loop = asyncio.get_event_loop()
+
+        pdf_reader = PDFReader(
+            dpi=config.pdf.dpi,
+            max_dimension=config.pdf.max_dimension,
         )
+        ocr_engine = OCREngine(config.ollama)
+        parser = OutputParser()
+        pdf_writer = DualLayerPDFWriter()
+        markdown_writer = MarkdownWriter()
 
-        input_file = task["input_file"]
-        output_dir = task["output_dir"]
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        input_file = Path(task["input_file"])
+        output_dir = Path(task["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stem: str = input_file.stem
 
-        result = await pipeline.convert_async(
-            input_pdf=input_file,
-            output_dir=output_dir,
-            generate_pdf=True,
-            generate_markdown=True,
+        start_time: float = time.time()
+
+        # 步骤1: 读取PDF，渲染为图片
+        task.update({"phase": "reading", "message": "Reading PDF..."})
+        page_images: list[PageImage] = await loop.run_in_executor(
+            None, pdf_reader.read_pdf, input_file
         )
+        total_pages: int = len(page_images)
+        task["total"] = total_pages
+        logger.info(f"Task {task_id}: PDF读取完成, 共 {total_pages} 页")
 
-        # 记录结果文件路径
-        if result.output_pdf:
-            task["result_pdf"] = str(result.output_pdf)
-        if result.output_markdown:
-            task["result_markdown"] = str(result.output_markdown)
+        # 步骤2: 计算 MD5，初始化缓存
+        task.update({"message": "Computing MD5..."})
+        pdf_md5: str = await loop.run_in_executor(None, OCRCache.compute_md5, input_file)
+        task["pdf_md5"] = pdf_md5
+        ocr_cache = OCRCache(Path(config.web.upload_dir) / "ocr_cache")
+        cached_count: int = ocr_cache.count_cached_pages(pdf_md5)
+        logger.info(f"Task {task_id}: PDF MD5={pdf_md5}, 已缓存 {cached_count}/{total_pages} 页")
 
-        task["status"] = "completed"
-        task["done"] = True
-        task["message"] = "Conversion completed"
-        logger.info(f"Task {task_id} completed successfully")
+        # 步骤3: OCR（检查缓存，跳过已缓存页）
+        pages_needing_ocr: list[int] = [
+            i for i in range(total_pages) if not ocr_cache.is_page_cached(pdf_md5, i)
+        ]
+
+        ocr_semaphore = _get_ocr_semaphore()
+        ocr_results: list[OCRResult] = []
+
+        if pages_needing_ocr:
+            task.update({"phase": "waiting_ocr", "message": "Waiting for GPU..."})
+            async with ocr_semaphore:
+                for i, page_img in enumerate(page_images):
+                    cached_result: OCRResult | None = ocr_cache.load_page(pdf_md5, i)
+                    if cached_result is not None:
+                        # 缓存命中，直接使用
+                        ocr_results.append(cached_result)
+                        task.update({
+                            "phase": "ocr",
+                            "current": i + 1,
+                            "message": f"OCR page {i + 1}/{total_pages} (cached)",
+                        })
+                        logger.debug(f"Task {task_id}: 页 {i} 缓存命中，跳过OCR")
+                        continue
+
+                    # 调用 OCR
+                    task.update({
+                        "phase": "ocr",
+                        "current": i + 1,
+                        "message": f"OCR page {i + 1}/{total_pages}",
+                    })
+                    result: OCRResult = await ocr_engine.ocr_single_image_async(
+                        image_data=page_img.image_bytes,
+                        page_index=page_img.page_index,
+                    )
+                    # 保存到缓存
+                    await loop.run_in_executor(
+                        None, ocr_cache.save_page, pdf_md5, i, result
+                    )
+                    ocr_results.append(result)
+                    if not result.success:
+                        logger.warning(f"Task {task_id}: 页 {i} OCR失败: {result.error_msg}")
+        else:
+            # 全部缓存命中，直接跳过 OCR
+            task.update({
+                "phase": "ocr",
+                "current": total_pages,
+                "message": f"Loading {total_pages} pages from cache...",
+            })
+            for i in range(total_pages):
+                cached: OCRResult | None = ocr_cache.load_page(pdf_md5, i)
+                if cached is not None:
+                    ocr_results.append(cached)
+                else:
+                    # 理论上不应发生（is_page_cached 检查通过），防御性处理
+                    logger.warning(f"Task {task_id}: 页 {i} 缓存读取失败，结果为空")
+                    ocr_results.append(OCRResult(
+                        page_index=i,
+                        raw_text="",
+                        success=False,
+                        error_msg="Cache read failed unexpectedly",
+                    ))
+            logger.info(f"Task {task_id}: 所有页面均命中缓存，跳过OCR")
+
+        # 步骤4: 解析OCR结果
+        task.update({
+            "phase": "parsing",
+            "current": total_pages,
+            "message": "Parsing OCR results...",
+        })
+        parsed_pages: list[ParsedPage] = []
+        for ocr_result in ocr_results:
+            parsed: ParsedPage = parser.parse(
+                raw_text=ocr_result.raw_text,
+                page_index=ocr_result.page_index,
+            )
+            parsed_pages.append(parsed)
+
+        # 步骤5: 生成双层PDF（加 generating 串行锁，避免 PyMuPDF GIL 争用）
+        output_pdf_path = output_dir / f"{stem}_ocr.pdf"
+        task.update({"phase": "waiting_generate", "message": "Waiting to generate..."})
+        generating_semaphore = _get_generating_semaphore()
+        async with generating_semaphore:
+            task.update({"phase": "generating", "message": "Generating PDF..."})
+            await loop.run_in_executor(
+                None,
+                pdf_writer.create_dual_layer_pdf,
+                page_images,
+                parsed_pages,
+                output_pdf_path,
+            )
+
+        task["result_pdf"] = str(output_pdf_path)
+
+        # 步骤6: 生成Markdown（在 generating 信号量外执行）
+        output_md_path = output_dir / f"{stem}.md"
+        task.update({"phase": "markdown", "message": "Generating Markdown..."})
+        await loop.run_in_executor(
+            None,
+            markdown_writer.write,
+            parsed_pages,
+            output_md_path,
+        )
+        task["result_markdown"] = str(output_md_path)
+
+        elapsed: float = time.time() - start_time
+        task.update({
+            "status": "completed",
+            "phase": "completed",
+            "done": True,
+            "message": f"Conversion completed in {elapsed:.1f}s",
+        })
+        logger.info(f"Task {task_id} completed in {elapsed:.1f}s")
 
     except ImportError as e:
         # 核心模块尚未实现时的处理
@@ -181,7 +339,7 @@ async def _run_conversion(task_id: str) -> None:
         task["done"] = True
         task["error"] = str(e)
         task["message"] = f"Error: {str(e)}"
-        logger.error(f"Task {task_id} failed: {e}")
+        logger.error(f"Task {task_id} failed: {e}", exc_info=True)
 
 
 @router.get("/api/progress/{task_id}")
