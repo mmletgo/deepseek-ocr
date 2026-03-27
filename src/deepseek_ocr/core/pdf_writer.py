@@ -9,11 +9,8 @@ Code Logic:
     1. 底层：原始扫描图像(overlay=False)
     2. 上层：使用TextWriter写入透明文字(render_mode=3 = 不可见)
     坐标从归一化(0-999)转换为PDF坐标(pt)。
-    使用线程池并行处理每页，充分利用多核CPU加速生成。
 """
 
-import concurrent.futures
-import os
 import pymupdf
 from pathlib import Path
 
@@ -46,41 +43,56 @@ class DualLayerPDFWriter:
         Business Logic:
             将扫描图像和OCR文本合并为双层PDF。
             生成的PDF外观与原始扫描PDF一致，但文字可搜索和复制。
-            使用线程池并行处理每页，充分利用多核CPU加速生成。
 
         Code Logic:
-            用ThreadPoolExecutor并行调用_render_page_to_bytes处理每页，
-            各线程独立创建Font和Document对象（线程安全），
-            并行处理完成后按原始顺序合并成最终PDF文档保存。
-            中间页字节流不压缩，最终合并时统一压缩。
+            顺序处理每页：先用 _render_page_to_bytes 将单页渲染为 PDF bytes，
+            再通过 insert_pdf 合并到最终文档中。
+            PyMuPDF 持有 Python GIL，使用 ThreadPoolExecutor 无法真正并行，
+            因此直接顺序循环处理，避免多线程争抢 GIL 的额外开销。
+            最终保存使用 deflate=False, garbage=1 保持轻量。
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
         logger.info(f"开始生成双层PDF: {output_path}, 共 {len(page_images)} 页")
 
-        cpu_count = os.cpu_count() or 4
-        max_workers = max(1, min(cpu_count, len(page_images)))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(self._render_page_to_bytes, page_img, parsed)
-                for page_img, parsed in zip(page_images, parsed_pages)
-            ]
-            page_bytes_list: list[bytes] = [f.result() for f in futures]
-
-        logger.info(f"所有页面并行处理完成，开始合并...")
+        # 直接顺序处理（PyMuPDF 持有 GIL，ThreadPoolExecutor 无法真正并行）
         final_doc: pymupdf.Document = pymupdf.open()
         try:
-            for page_bytes in page_bytes_list:
+            for page_img, parsed in zip(page_images, parsed_pages):
+                page_bytes: bytes = self._render_page_to_bytes(page_img, parsed)
                 src: pymupdf.Document = pymupdf.open("pdf", page_bytes)
                 final_doc.insert_pdf(src)
                 src.close()
-            # 各页已预压缩，直接保存无需再次 deflate/garbage
+
             final_doc.save(str(output_path), deflate=False, garbage=1)
             logger.info(f"双层PDF生成完成: {output_path}")
         finally:
             final_doc.close()
 
         return output_path
+
+    def _render_page_to_bytes(
+        self,
+        page_img: PageImage,
+        parsed: ParsedPage,
+    ) -> bytes:
+        """
+        Business Logic:
+            将单页图像和OCR文本渲染为单页 PDF 的字节流。
+            用于逐页独立生成，便于顺序合并到最终文档。
+
+        Code Logic:
+            创建单页 PDF 文档，调用 _add_page 写入图像和文字层，
+            使用 tobytes 导出为内存字节，最后关闭临时文档。
+        """
+        page_doc: pymupdf.Document = pymupdf.open()
+        try:
+            self._add_page(page_doc, page_img, parsed)
+            result: bytes = page_doc.tobytes(deflate=False)
+        finally:
+            page_doc.close()
+        return result
 
     def _add_page(
         self,
@@ -168,49 +180,3 @@ class DualLayerPDFWriter:
 
         # 4. render_mode=3 -> 不可见文字（可搜索但不显示）
         tw.write_text(page, render_mode=3)
-
-    @staticmethod
-    def _render_page_to_bytes(page_img: PageImage, parsed: ParsedPage) -> bytes:
-        """
-        Business Logic:
-            线程安全的单页处理函数，用于并行生成双层PDF的每一页。
-            每次调用独立创建Font和Document对象，不共享任何状态。
-
-        Code Logic:
-            在独立线程中创建单页PDF文档，嵌入图像和透明文字层，
-            返回未压缩的PDF字节流供后续合并。
-        """
-        font: pymupdf.Font = pymupdf.Font("helv")
-        single_doc: pymupdf.Document = pymupdf.open()
-        try:
-            page: pymupdf.Page = single_doc.new_page(
-                width=page_img.original_width,
-                height=page_img.original_height,
-            )
-            page.insert_image(page.rect, stream=page_img.image_bytes, overlay=False)
-            tw: pymupdf.TextWriter = pymupdf.TextWriter(page.rect)
-            for block in parsed.blocks:
-                if not block.text.strip():
-                    continue
-                pdf_x1: float = block.bbox[0] / 999.0 * page.rect.width
-                pdf_y1: float = block.bbox[1] / 999.0 * page.rect.height
-                pdf_x2: float = block.bbox[2] / 999.0 * page.rect.width
-                pdf_y2: float = block.bbox[3] / 999.0 * page.rect.height
-                rect: pymupdf.Rect = pymupdf.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
-                if rect.width <= 0 or rect.height <= 0:
-                    continue
-                lines: list[str] = block.text.strip().split('\n')
-                fontsize: float = max(min(rect.height / max(len(lines), 1) * 0.75, 36.0), 3.0)
-                try:
-                    tw.fill_textbox(rect, block.text, font=font, fontsize=fontsize)
-                except Exception:
-                    try:
-                        tw.fill_textbox(rect, block.text, font=font,
-                                        fontsize=max(fontsize * 0.5, 3.0))
-                    except Exception:
-                        pass
-            tw.write_text(page, render_mode=3)
-            # 每页单独压缩（并行执行，效率高），最终合并时无需重压缩
-            return single_doc.tobytes(deflate=True, garbage=1)
-        finally:
-            single_doc.close()

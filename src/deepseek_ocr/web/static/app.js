@@ -30,11 +30,16 @@
 
     // phase 文字映射
     var PHASE_LABELS = {
-        waiting_ocr: "Waiting for GPU",
-        reading_pdf: "Reading",
-        ocr: "OCR",
-        generating: "Generating",
-        done: "Done",
+        waiting_ocr:      "Waiting for GPU",
+        reading_pdf:      "Reading",
+        reading:          "Reading",
+        ocr:              "OCR",
+        parsing:          "Parsing",
+        waiting_generate: "Waiting to generate",
+        generating:       "Generating",
+        markdown:         "Markdown",
+        done:             "Done",
+        completed:        "Done",
     };
 
     // --- 初始化 ---
