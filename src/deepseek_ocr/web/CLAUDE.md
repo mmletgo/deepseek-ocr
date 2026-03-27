@@ -37,10 +37,21 @@
 - 每次转换前检查每页是否已缓存，仅OCR未缓存的页
 - 全部命中缓存时直接跳过OCR阶段
 
+## 前端设计风格
+- **Apple 设计语言**: 温灰背景 (#f5f5f7)、多层阴影 (box-shadow)、大圆角 (16px+)、pill 形按钮
+- **暗色模式支持**: 通过 `prefers-color-scheme: dark` 媒体查询自动切换暗色配色
+- **SVG 图标**: 使用内联 SVG 图标替代 emoji，保持视觉一致性
+- **任务卡片入场动画**: 新任务卡片以 fadeInUp 动画进入
+- **健康指示灯**: 脉冲动画 (pulse) 指示服务连接状态
+
 ## 前端模式选择
-- 上传区域包含 radio 按钮组：Dual Layer / Rewrite
+- 上传区域包含 Apple 风格 segmented control：Dual Layer / Rewrite
 - FormData 附带 `pdf_mode` 字段传递给后端
 - 后端读取 task["pdf_mode"] 传递给 `create_dual_layer_pdf(mode=pdf_mode)`
+
+## SSE 进度推送
+- SSE event_data 包含字段: `current`, `total`, `status`, `phase`, `done`, 可选 `error`
+- `phase` 字段用于前端相位徽标 (phase badge) 更新，显示当前任务阶段
 
 ## 任务 phase 状态流转
 `queued` → `reading` → `waiting_ocr` → `ocr` → `parsing` → `waiting_generate` → `generating` → `markdown` → `completed`

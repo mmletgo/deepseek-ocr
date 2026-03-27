@@ -10,33 +10,43 @@
     <div class="container">
         <!-- 页面头部 -->
         <header>
+            <svg class="header-logo" width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="2" width="22" height="30" rx="3" stroke="#007AFF" stroke-width="2.2" fill="none"/>
+                <path d="M12 10h10M12 15h10M12 20h7" stroke="#007AFF" stroke-width="1.8" stroke-linecap="round"/>
+                <circle cx="28" cy="28" r="10" fill="#007AFF" opacity="0.12"/>
+                <circle cx="28" cy="28" r="7.5" stroke="#007AFF" stroke-width="2" fill="none"/>
+                <path d="M28 24v8M24 28h8" stroke="#007AFF" stroke-width="2" stroke-linecap="round"/>
+            </svg>
             <h1>DeepSeek-OCR</h1>
             <p>Upload a scanned PDF to convert it into searchable PDF and Markdown</p>
+            <span class="header-badge">v0.1.0</span>
         </header>
 
         <!-- 主卡片区域 -->
         <main class="card">
             <!-- 拖拽上传区域 -->
             <section id="uploadZone" class="upload-zone" role="button" aria-label="Upload PDF file">
-                <span class="upload-icon" aria-hidden="true">&#128196;</span>
+                <div class="upload-icon-wrapper">
+                    <svg width="52" height="52" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M28 38V16" stroke="#007AFF" stroke-width="2.5" stroke-linecap="round"/>
+                        <path d="M20 24l8-8 8 8" stroke="#007AFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M10 36c-3.3 0-6-2.7-6-6 0-2.8 1.9-5.1 4.5-5.8C8.2 18.3 13.5 14 20 14c1.4 0 2.8.2 4 .6C26.2 11 30.8 8 36 8c7.7 0 14 6.3 14 14 0 .5 0 1-.1 1.5C52.6 25 54 27.3 54 30c0 3.9-3.1 7-7 7" stroke="#007AFF" stroke-width="2.2" stroke-linecap="round"/>
+                    </svg>
+                </div>
                 <h3>Drag and drop your PDF here</h3>
                 <p>or click to select a file</p>
-                <div class="mode-selector" id="modeSelector">
-                    <label class="mode-option">
-                        <input type="radio" name="pdfMode" value="dual_layer" checked>
-                        <span class="mode-label">
-                            <span class="mode-title">Dual Layer</span>
-                            <span class="mode-desc">Invisible text, original scan look</span>
-                        </span>
-                    </label>
-                    <label class="mode-option">
-                        <input type="radio" name="pdfMode" value="rewrite">
-                        <span class="mode-label">
-                            <span class="mode-title">Rewrite</span>
-                            <span class="mode-desc">Vector font, clearer text</span>
-                        </span>
-                    </label>
+                <div class="segmented-control" id="modeSelector">
+                    <div class="segmented-track" id="segmentedTrack"></div>
+                    <button type="button" class="segment active" data-value="dual_layer">
+                        <span class="segment-title">Dual Layer</span>
+                        <span class="segment-desc">Original scan look</span>
+                    </button>
+                    <button type="button" class="segment" data-value="rewrite">
+                        <span class="segment-title">Rewrite</span>
+                        <span class="segment-desc">Vector font text</span>
+                    </button>
                 </div>
+                <input type="hidden" name="pdfMode" id="pdfModeInput" value="dual_layer">
                 <button type="button" class="upload-btn" id="uploadBtn">Select PDF File</button>
                 <input type="file" class="file-input" id="fileInput" accept=".pdf,application/pdf" multiple>
             </section>
@@ -50,7 +60,6 @@
 
         <!-- 页脚 -->
         <footer>
-            <p>DeepSeek-OCR v0.1.0</p>
             <div class="health-indicator">
                 <span class="health-dot" id="healthDot"></span>
                 <span id="healthText">Checking service status...</span>

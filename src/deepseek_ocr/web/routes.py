@@ -405,6 +405,7 @@ async def get_progress(task_id: str) -> EventSourceResponse:
                     "current": current,
                     "total": total,
                     "status": message,
+                    "phase": task.get("phase", ""),
                     "done": done,
                 }
                 if error:

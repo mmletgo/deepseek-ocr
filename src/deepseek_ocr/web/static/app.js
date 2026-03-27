@@ -49,7 +49,29 @@
         bindDragEvents();
         bindFileEvents();
         bindClearBtn();
+        bindSegmentedControl();
         checkHealth();
+    }
+
+    // --- Segmented Control ---
+    function bindSegmentedControl() {
+        var segments = document.querySelectorAll('.segment');
+        var segmentedTrack = document.getElementById('segmentedTrack');
+        var pdfModeInput = document.getElementById('pdfModeInput');
+
+        segments.forEach(function(seg, index) {
+            seg.addEventListener('click', function(e) {
+                e.stopPropagation(); // 防止触发 uploadZone 的 click
+                segments.forEach(function(s) { s.classList.remove('active'); });
+                seg.classList.add('active');
+                pdfModeInput.value = seg.dataset.value;
+                if (index === 0) {
+                    segmentedTrack.classList.remove('right');
+                } else {
+                    segmentedTrack.classList.add('right');
+                }
+            });
+        });
     }
 
     // --- 拖拽事件（与原来完全一致，只改 handleFile → handleFiles） ---
@@ -120,8 +142,8 @@
         pdfFiles.forEach(function (f) {
             formData.append("files", f);   // 字段名 "files"（复数）
         });
-        var modeRadio = document.querySelector('input[name="pdfMode"]:checked');
-        formData.append("pdf_mode", modeRadio ? modeRadio.value : "dual_layer");
+        var pdfModeInput = document.getElementById('pdfModeInput');
+        formData.append("pdf_mode", pdfModeInput ? pdfModeInput.value : "dual_layer");
 
         try {
             var response = await fetch("/api/upload", {
@@ -155,6 +177,8 @@
     function createTaskCard(taskId, filename) {
         taskRegistry[taskId] = { filename: filename, eventSource: null, status: "pending" };
 
+        var downloadSvg = '<svg class="download-btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+
         var card = document.createElement("div");
         card.className = "task-card";
         card.id = "task-" + taskId;
@@ -174,10 +198,10 @@
             '</div>' +
             '<div class="task-downloads" id="dl-' + taskId + '" style="display:none">' +
                 '<a href="/api/download/' + taskId + '/pdf" class="download-btn" download>' +
-                    '<span class="download-btn-icon" aria-hidden="true">&#128196;</span>Download PDF' +
+                    downloadSvg + 'Download PDF' +
                 '</a>' +
                 '<a href="/api/download/' + taskId + '/markdown" class="download-btn" download>' +
-                    '<span class="download-btn-icon" aria-hidden="true">&#128221;</span>Download Markdown' +
+                    downloadSvg + 'Download Markdown' +
                 '</a>' +
             '</div>' +
             '<div class="task-error" id="err-' + taskId + '" style="display:none"></div>';

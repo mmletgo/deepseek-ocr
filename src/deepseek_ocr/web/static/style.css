@@ -1,517 +1,857 @@
 /*
  * DeepSeek-OCR Web 样式表
- * 现代简洁设计风格，浅色主题，响应式布局
- * 纯CSS实现，不依赖任何框架
+ * Apple Design Language — SF Pro, 多层阴影, 圆润圆角, 微妙动效
+ * 纯CSS实现，支持亮/暗色模式自适应
  */
 
-/* --- CSS变量定义 --- */
+/* ========================================================
+   Design Tokens
+   ======================================================== */
 :root {
-    --color-primary: #2563eb;
-    --color-primary-hover: #1d4ed8;
-    --color-primary-light: #dbeafe;
-    --color-success: #16a34a;
-    --color-success-light: #dcfce7;
-    --color-error: #dc2626;
-    --color-error-light: #fee2e2;
-    --color-warning: #f59e0b;
-    --color-bg: #f8fafc;
-    --color-surface: #ffffff;
-    --color-border: #e2e8f0;
-    --color-border-hover: #94a3b8;
-    --color-text: #1e293b;
-    --color-text-secondary: #64748b;
-    --color-text-muted: #94a3b8;
-    --radius: 12px;
-    --radius-sm: 8px;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
-    --transition: 0.2s ease;
+  /* Apple 调色板 */
+  --apple-blue: #007AFF;
+  --apple-blue-hover: #0066D6;
+  --apple-blue-light: rgba(0, 122, 255, 0.08);
+  --apple-green: #34C759;
+  --apple-green-light: rgba(52, 199, 89, 0.08);
+  --apple-red: #FF3B30;
+  --apple-red-light: rgba(255, 59, 48, 0.08);
+  --apple-orange: #FF9500;
+  --apple-orange-light: rgba(255, 149, 0, 0.08);
+  --apple-indigo: #5856D6;
+  --apple-teal: #5AC8FA;
+
+  /* 表面 */
+  --bg: #F5F5F7;
+  --surface: #FFFFFF;
+  --surface-secondary: #F9F9FB;
+  --border: rgba(0, 0, 0, 0.06);
+  --border-strong: rgba(0, 0, 0, 0.12);
+
+  /* 文字 */
+  --text-primary: #1D1D1F;
+  --text-secondary: #86868B;
+  --text-tertiary: #AEAEB2;
+
+  /* 多层阴影 */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.03);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.06);
+  --shadow-lg: 0 4px 12px rgba(0,0,0,0.05), 0 12px 40px rgba(0,0,0,0.08);
+  --shadow-hover: 0 4px 16px rgba(0,0,0,0.06), 0 16px 48px rgba(0,0,0,0.1);
+
+  /* 圆角 */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* 字体 */
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+
+  /* 过渡 */
+  --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --duration: 0.3s;
+  --duration-fast: 0.15s;
 }
 
-/* --- 全局重置和基础样式 --- */
+/* ========================================================
+   Dark Mode Token Overrides
+   ======================================================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --surface: #1C1C1E;
+    --surface-secondary: #2C2C2E;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.15);
+    --text-primary: #F5F5F7;
+    --text-secondary: #98989D;
+    --text-tertiary: #636366;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.2);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,0.3), 0 12px 40px rgba(0,0,0,0.25);
+    --shadow-hover: 0 4px 16px rgba(0,0,0,0.35), 0 16px 48px rgba(0,0,0,0.3);
+  }
+}
+
+/* ========================================================
+   Global Reset & Base
+   ======================================================== */
 *,
 *::before,
 *::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background-color: var(--color-bg);
-    color: var(--color-text);
-    line-height: 1.6;
-    min-height: 100vh;
+  font-family: var(--font);
+  background-color: var(--bg);
+  color: var(--text-primary);
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
 }
 
-/* --- 页面布局 --- */
+::selection {
+  background: var(--apple-blue-light);
+}
+
+/* ========================================================
+   Container
+   ======================================================== */
 .container {
-    max-width: 680px;
-    margin: 0 auto;
-    padding: 40px 20px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 24px;
 }
 
-/* --- 页面头部 --- */
+/* ========================================================
+   Header
+   ======================================================== */
 header {
-    text-align: center;
-    margin-bottom: 40px;
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 16px;
+  color: var(--apple-blue);
 }
 
 header h1 {
-    font-size: 1.75rem;
-    font-weight: 700;
-    color: var(--color-text);
-    margin-bottom: 8px;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.025em;
+  margin-bottom: 8px;
 }
 
 header p {
-    font-size: 0.95rem;
-    color: var(--color-text-secondary);
+  font-size: 1.0625rem;
+  color: var(--text-secondary);
 }
 
-/* --- 卡片容器 --- */
+.header-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-secondary);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  letter-spacing: 0.02em;
+}
+
+/* ========================================================
+   Card
+   ======================================================== */
 .card {
-    background: var(--color-surface);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    padding: 32px;
-    margin-bottom: 24px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 40px;
+  border: 1px solid var(--border);
+  margin-bottom: 24px;
 }
 
-/* --- 拖拽上传区域 --- */
+/* ========================================================
+   Upload Zone
+   ======================================================== */
 .upload-zone {
-    border: 2px dashed var(--color-border);
-    border-radius: var(--radius);
-    padding: 48px 32px;
-    text-align: center;
-    cursor: pointer;
-    transition: all var(--transition);
-    background: var(--color-surface);
+  background: var(--surface-secondary);
+  border-radius: var(--radius-md);
+  border: 1.5px dashed transparent;
+  padding: 56px 40px;
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease-apple);
 }
 
 .upload-zone:hover {
-    border-color: var(--color-primary);
-    background-color: var(--color-primary-light);
+  background: rgba(0, 122, 255, 0.04);
+  border-color: rgba(0, 122, 255, 0.2);
 }
 
 .upload-zone.drag-over {
-    border-color: var(--color-primary);
-    background-color: var(--color-primary-light);
-    transform: scale(1.01);
+  background: rgba(0, 122, 255, 0.06);
+  border-color: var(--apple-blue);
+  transform: scale(1.005);
+  box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.1);
 }
 
 .upload-zone.disabled {
-    opacity: 0.5;
-    pointer-events: none;
-    cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
-.upload-icon {
-    font-size: 48px;
-    color: var(--color-text-muted);
-    margin-bottom: 16px;
-    display: block;
+.upload-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  animation: gentle-float 3s ease-in-out infinite;
+}
+
+.upload-icon-wrapper svg {
+  width: 56px;
+  height: 56px;
+  color: var(--text-tertiary);
+  transition: color var(--duration) var(--ease-apple);
+}
+
+.upload-zone:hover .upload-icon-wrapper svg {
+  color: var(--apple-blue);
+}
+
+
+@keyframes gentle-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 
 .upload-zone h3 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin-bottom: 8px;
-    color: var(--color-text);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
 }
 
 .upload-zone p {
-    font-size: 0.875rem;
-    color: var(--color-text-secondary);
-    margin-bottom: 16px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
 }
 
+/* ========================================================
+   Segmented Control (replaces radio buttons)
+   ======================================================== */
+.segmented-control {
+  display: flex;
+  position: relative;
+  background: var(--surface-secondary);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  margin: 20px auto;
+  max-width: 400px;
+}
+
+.segmented-track {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 4px);
+  height: calc(100% - 6px);
+  background: var(--surface);
+  border-radius: calc(var(--radius-sm) - 2px);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--duration) var(--ease-spring);
+  z-index: 0;
+}
+
+.segmented-track.right {
+  transform: translateX(calc(100% + 2px));
+}
+
+.segment {
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  transition: all var(--duration-fast) var(--ease-apple);
+}
+
+.segment.active .segment-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.segment:not(.active) .segment-title {
+  color: var(--text-secondary);
+}
+
+.segment-title {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: color var(--duration-fast) var(--ease-apple), font-weight var(--duration-fast) var(--ease-apple);
+}
+
+.segment-desc {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+
+/* ========================================================
+   Upload Button
+   ======================================================== */
 .upload-btn {
-    display: inline-block;
-    padding: 10px 24px;
-    background-color: var(--color-primary);
-    color: #ffffff;
-    border: none;
-    border-radius: var(--radius-sm);
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background-color var(--transition);
+  display: inline-block;
+  padding: 12px 28px;
+  background-color: var(--apple-blue);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease-apple);
+  letter-spacing: -0.01em;
 }
 
 .upload-btn:hover {
-    background-color: var(--color-primary-hover);
+  background-color: var(--apple-blue-hover);
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
 }
 
-/* 隐藏原生文件输入 */
+.upload-btn:active {
+  transform: scale(0.97);
+}
+
 .file-input {
-    display: none;
+  display: none;
 }
 
-/* --- 文件信息 --- */
+/* ========================================================
+   File Info
+   ======================================================== */
 .file-info {
-    display: none;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: var(--color-bg);
-    border-radius: var(--radius-sm);
-    margin-bottom: 20px;
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-secondary);
+  border-radius: var(--radius-sm);
+  margin-bottom: 20px;
 }
 
 .file-info.visible {
-    display: flex;
+  display: flex;
 }
 
 .file-info-icon {
-    font-size: 24px;
-    color: var(--color-primary);
-    flex-shrink: 0;
+  font-size: 24px;
+  color: var(--apple-blue);
+  flex-shrink: 0;
 }
 
 .file-info-details {
-    flex: 1;
-    min-width: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 .file-info-name {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--color-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .file-info-size {
-    font-size: 0.75rem;
-    color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
-/* --- 进度区域 --- */
+/* ========================================================
+   Task List & Task Cards
+   ======================================================== */
+.task-list {
+  margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.task-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-sm);
+  animation: card-enter 0.4s var(--ease-spring) both;
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.task-filename {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70%;
+}
+
+.task-phase-badge {
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Phase color variants */
+.phase-waiting_ocr,
+.phase-waiting_generate {
+  background: var(--apple-orange-light);
+  color: #C77800;
+}
+
+.phase-reading,
+.phase-reading_pdf {
+  background: var(--apple-blue-light);
+  color: var(--apple-blue);
+}
+
+.phase-ocr {
+  background: rgba(88, 86, 214, 0.08);
+  color: var(--apple-indigo);
+}
+
+.phase-parsing {
+  background: rgba(90, 200, 250, 0.1);
+  color: #0891B2;
+}
+
+.phase-generating,
+.phase-markdown {
+  background: var(--apple-blue-light);
+  color: var(--apple-blue);
+}
+
+.phase-done,
+.phase-completed {
+  background: var(--apple-green-light);
+  color: #248A3D;
+}
+
+/* ========================================================
+   Progress Bar
+   ======================================================== */
 .progress-section {
-    display: none;
-    margin-top: 24px;
+  display: none;
+  margin-top: 24px;
 }
 
 .progress-section.visible {
-    display: block;
+  display: block;
 }
 
 .progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .progress-label {
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--color-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 
 .progress-percent {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--color-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--apple-blue);
 }
 
 .progress-bar-container {
-    width: 100%;
-    height: 8px;
-    background-color: var(--color-border);
-    border-radius: 4px;
-    overflow: hidden;
-    margin-bottom: 8px;
+  width: 100%;
+  height: 4px;
+  background: var(--border-strong);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 10px;
 }
 
 .progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--color-primary), #60a5fa);
-    border-radius: 4px;
-    width: 0%;
-    transition: width 0.4s ease;
-    position: relative;
+  height: 100%;
+  background: linear-gradient(90deg, var(--apple-blue), #5AC8FA);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.5s var(--ease-apple);
+  position: relative;
 }
 
-/* 进度条动画效果 */
+/* Shimmer animation — softer version */
 .progress-bar::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(
-        90deg,
-        transparent,
-        rgba(255, 255, 255, 0.3),
-        transparent
-    );
-    animation: shimmer 1.5s infinite;
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    transparent
+  );
+  animation: shimmer 2s infinite;
 }
 
 @keyframes shimmer {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.progress-bar.completed {
+  background: var(--apple-green);
 }
 
 .progress-bar.completed::after {
-    animation: none;
+  animation: none;
 }
 
 .progress-status {
-    font-size: 0.8rem;
-    color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
 }
 
-/* --- 结果区域 --- */
-.result-section {
-    display: none;
-    margin-top: 24px;
+.task-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.result-section.visible {
-    display: block;
+.task-status-text {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
 }
 
-.result-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 16px;
+.task-percent {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--apple-blue);
+  font-variant-numeric: tabular-nums;
 }
 
-.result-header-icon {
-    color: var(--color-success);
-    font-size: 20px;
-}
-
-.result-header h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--color-success);
+/* ========================================================
+   Download Buttons
+   ======================================================== */
+.task-downloads {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
 }
 
 .download-buttons {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .download-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 24px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
-    color: var(--color-text);
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    text-decoration: none;
-    transition: all var(--transition);
-    flex: 1;
-    justify-content: center;
-    min-width: 180px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease-apple);
+  flex: 1;
+  min-width: 160px;
 }
 
 .download-btn:hover {
-    border-color: var(--color-primary);
-    color: var(--color-primary);
-    box-shadow: var(--shadow);
+  border-color: var(--apple-blue);
+  color: var(--apple-blue);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.download-btn:active {
+  transform: translateY(0) scale(0.98);
 }
 
 .download-btn-icon {
-    font-size: 18px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
-/* --- 错误提示 --- */
+/* ========================================================
+   Result Section
+   ======================================================== */
+.result-section {
+  display: none;
+  margin-top: 24px;
+}
+
+.result-section.visible {
+  display: block;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.result-header-icon {
+  color: var(--apple-green);
+  font-size: 20px;
+}
+
+.result-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--apple-green);
+}
+
+/* ========================================================
+   Error Display
+   ======================================================== */
 .error-section {
-    display: none;
-    margin-top: 24px;
+  display: none;
+  margin-top: 24px;
 }
 
 .error-section.visible {
-    display: block;
+  display: block;
 }
 
 .error-message {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 16px;
-    background: var(--color-error-light);
-    border: 1px solid #fecaca;
-    border-radius: var(--radius-sm);
-    color: var(--color-error);
-    font-size: 0.875rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  background: var(--apple-red-light);
+  border-radius: var(--radius-sm);
+  color: var(--apple-red);
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
 
 .error-icon {
-    flex-shrink: 0;
-    font-size: 18px;
+  flex-shrink: 0;
+  font-size: 18px;
 }
 
 .error-text {
-    flex: 1;
-    line-height: 1.5;
+  flex: 1;
+  line-height: 1.5;
 }
 
-/* --- 重新上传按钮 --- */
+.task-error {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: var(--apple-red-light);
+  border-radius: var(--radius-sm);
+  color: var(--apple-red);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ========================================================
+   Clear / Reset Button
+   ======================================================== */
+.clear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 20px;
+  padding: 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration) var(--ease-apple);
+}
+
+.clear-btn:hover {
+  border-color: var(--apple-red);
+  color: var(--apple-red);
+  background: var(--apple-red-light);
+}
+
 .reset-btn {
-    display: none;
-    margin-top: 16px;
-    padding: 10px 24px;
-    background: none;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: all var(--transition);
-    width: 100%;
-    text-align: center;
+  display: none;
+  margin-top: 16px;
+  padding: 12px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all var(--duration) var(--ease-apple);
+  width: 100%;
+  text-align: center;
 }
 
 .reset-btn.visible {
-    display: block;
+  display: block;
 }
 
 .reset-btn:hover {
-    border-color: var(--color-text-secondary);
-    color: var(--color-text);
+  border-color: var(--apple-red);
+  color: var(--apple-red);
+  background: var(--apple-red-light);
 }
 
-/* --- 页脚 --- */
+/* ========================================================
+   Footer
+   ======================================================== */
 footer {
-    text-align: center;
-    margin-top: 40px;
-    padding-top: 20px;
-    border-top: 1px solid var(--color-border);
+  text-align: center;
+  margin-top: 48px;
+  padding-top: 24px;
 }
 
 footer p {
-    font-size: 0.8rem;
-    color: var(--color-text-muted);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
 }
 
-/* --- 健康状态指示 --- */
 .health-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    color: var(--color-text-muted);
-    margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 8px;
 }
 
 .health-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: var(--color-text-muted);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-tertiary);
+  position: relative;
 }
 
 .health-dot.ok {
-    background-color: var(--color-success);
+  background-color: var(--apple-green);
+}
+
+.health-dot.ok::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--apple-green);
+  animation: pulse-ring 2s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0%, 100% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
 }
 
 .health-dot.error {
-    background-color: var(--color-error);
+  background-color: var(--apple-red);
 }
 
-/* --- 响应式设计 --- */
+/* ========================================================
+   Responsive — max-width 640px
+   ======================================================== */
 @media (max-width: 640px) {
-    .container {
-        padding: 24px 16px;
-    }
+  .container {
+    padding: 24px 16px;
+  }
 
-    header h1 {
-        font-size: 1.5rem;
-    }
+  header h1 {
+    font-size: 1.625rem;
+  }
 
-    .card {
-        padding: 24px 20px;
-    }
+  .card {
+    padding: 28px 20px;
+    border-radius: var(--radius-md);
+  }
 
-    .upload-zone {
-        padding: 32px 20px;
-    }
+  .upload-zone {
+    padding: 40px 20px;
+  }
 
-    .download-buttons {
-        flex-direction: column;
-    }
+  .segmented-control {
+    max-width: 100%;
+  }
 
-    .download-btn {
-        min-width: auto;
-    }
-}
-
-/* --- PDF Mode Selector --- */
-.mode-selector {
-    display: flex;
-    gap: 12px;
-    margin: 16px 0;
-    justify-content: center;
-}
-
-.mode-option {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 12px 16px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: all var(--transition);
-    text-align: left;
-    flex: 1;
-    max-width: 240px;
-}
-
-.mode-option:hover {
-    border-color: var(--color-primary);
-}
-
-.mode-option:has(input:checked) {
-    border-color: var(--color-primary);
-    background-color: var(--color-primary-light);
-}
-
-.mode-option input[type="radio"] {
-    margin-top: 2px;
-    accent-color: var(--color-primary);
-}
-
-.mode-label {
-    display: flex;
+  .task-downloads {
     flex-direction: column;
-    gap: 2px;
-}
+  }
 
-.mode-title {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--color-text);
-}
+  .download-buttons {
+    flex-direction: column;
+  }
 
-.mode-desc {
-    font-size: 0.75rem;
-    color: var(--color-text-secondary);
-    line-height: 1.3;
-}
+  .download-btn {
+    min-width: auto;
+  }
 
-@media (max-width: 640px) {
-    .mode-selector {
-        flex-direction: column;
-        align-items: center;
-    }
-    .mode-option {
-        max-width: 100%;
-    }
+  .task-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .task-filename {
+    max-width: 100%;
+  }
 }
