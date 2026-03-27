@@ -24,7 +24,7 @@ import asyncio
 import uuid
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 from deepseek_ocr.config import AppConfig
 from deepseek_ocr.utils.logger import logger
