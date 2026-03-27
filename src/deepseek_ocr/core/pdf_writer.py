@@ -13,6 +13,7 @@ Code Logic:
 """
 
 import concurrent.futures
+import os
 import pymupdf
 from pathlib import Path
 
@@ -57,20 +58,24 @@ class DualLayerPDFWriter:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"开始生成双层PDF: {output_path}, 共 {len(page_images)} 页")
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        cpu_count = os.cpu_count() or 4
+        max_workers = max(1, min(cpu_count, len(page_images)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(self._render_page_to_bytes, page_img, parsed)
                 for page_img, parsed in zip(page_images, parsed_pages)
             ]
             page_bytes_list: list[bytes] = [f.result() for f in futures]
 
+        logger.info(f"所有页面并行处理完成，开始合并...")
         final_doc: pymupdf.Document = pymupdf.open()
         try:
             for page_bytes in page_bytes_list:
                 src: pymupdf.Document = pymupdf.open("pdf", page_bytes)
                 final_doc.insert_pdf(src)
                 src.close()
-            final_doc.save(str(output_path), deflate=True, garbage=4)
+            # 各页已预压缩，直接保存无需再次 deflate/garbage
+            final_doc.save(str(output_path), deflate=False, garbage=1)
             logger.info(f"双层PDF生成完成: {output_path}")
         finally:
             final_doc.close()
@@ -205,6 +210,7 @@ class DualLayerPDFWriter:
                     except Exception:
                         pass
             tw.write_text(page, render_mode=3)
-            return single_doc.tobytes(deflate=False)
+            # 每页单独压缩（并行执行，效率高），最终合并时无需重压缩
+            return single_doc.tobytes(deflate=True, garbage=1)
         finally:
             single_doc.close()
