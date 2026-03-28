@@ -46,6 +46,43 @@
                         <span class="segment-desc">Vector font text</span>
                     </button>
                 </div>
+                <!-- 翻译选项 -->
+                <div class="translate-options" id="translateOptions">
+                    <label class="toggle-switch" id="translateSwitch">
+                        <input type="checkbox" id="translateToggle">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Translate after OCR</span>
+                    </label>
+                    <div class="lang-selectors" id="langSelectors" style="display:none">
+                        <div class="lang-selector">
+                            <label for="sourceLang">From</label>
+                            <select id="sourceLang">
+                                <option value="English" selected>English</option>
+                                <option value="Japanese">Japanese</option>
+                                <option value="German">German</option>
+                                <option value="French">French</option>
+                                <option value="Spanish">Spanish</option>
+                                <option value="Russian">Russian</option>
+                            </select>
+                        </div>
+                        <span class="lang-arrow">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+                        </span>
+                        <div class="lang-selector">
+                            <label for="targetLang">To</label>
+                            <select id="targetLang">
+                                <option value="Simplified Chinese" selected>简体中文</option>
+                                <option value="Traditional Chinese">繁體中文</option>
+                                <option value="Japanese">日本語</option>
+                                <option value="Korean">한국어</option>
+                                <option value="English">English</option>
+                                <option value="French">Français</option>
+                                <option value="German">Deutsch</option>
+                                <option value="Spanish">Español</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
                 <input type="hidden" name="pdfMode" id="pdfModeInput" value="dual_layer">
                 <button type="button" class="upload-btn" id="uploadBtn">Select PDF File</button>
                 <input type="file" class="file-input" id="fileInput" accept=".pdf,application/pdf" multiple>

@@ -22,6 +22,8 @@ from deepseek_ocr.core.ocr_engine import OCREngine, OCRResult, PromptMode
 from deepseek_ocr.core.output_parser import OutputParser, ParsedPage
 from deepseek_ocr.core.pdf_writer import DualLayerPDFWriter
 from deepseek_ocr.core.markdown_writer import MarkdownWriter
+from deepseek_ocr.core.translator import Translator, TranslatedPage
+from deepseek_ocr.core.translated_pdf_writer import TranslatedPDFWriter
 from deepseek_ocr.utils.logger import logger
 
 
@@ -35,6 +37,9 @@ class ConversionResult:
     success: bool             # 转换是否成功
     error_msg: str | None = None  # 错误信息(成功时为None)
     elapsed_seconds: float = 0.0  # 总耗时(秒)
+    output_translated_pdf: Path | None = None    # 翻译后PDF路径
+    output_bilingual_pdf: Path | None = None     # 双语对照PDF路径
+    translation_error: str | None = None         # 翻译错误（不影响OCR结果）
 
 
 class ConversionPipeline:
@@ -49,10 +54,12 @@ class ConversionPipeline:
         Business Logic:
             初始化转换流水线，创建所有子模块实例。
             progress_callback用于向上层(CLI/Web)报告处理进度。
+            如果配置了翻译API密钥，还会初始化Translator和TranslatedPDFWriter。
 
         Code Logic:
             根据AppConfig初始化PDFReader(使用pdf配置)、OCREngine(使用ollama配置)、
             OutputParser、DualLayerPDFWriter和MarkdownWriter。
+            如果translation.api_key非空，初始化Translator和TranslatedPDFWriter。
             保存进度回调函数。
         """
         self.config: AppConfig = config
@@ -67,6 +74,13 @@ class ConversionPipeline:
         self.parser: OutputParser = OutputParser()
         self.pdf_writer: DualLayerPDFWriter = DualLayerPDFWriter()
         self.markdown_writer: MarkdownWriter = MarkdownWriter()
+
+        if config.translation.api_key:
+            self.translator: Translator | None = Translator(config.translation)
+            self.translated_pdf_writer: TranslatedPDFWriter | None = TranslatedPDFWriter()
+        else:
+            self.translator = None
+            self.translated_pdf_writer = None
 
         logger.info("ConversionPipeline初始化完成")
 
@@ -88,19 +102,26 @@ class ConversionPipeline:
         output_dir: str | Path,
         generate_pdf: bool = True,
         generate_markdown: bool = True,
+        translate: bool = False,
+        source_lang: str | None = None,
+        target_lang: str | None = None,
     ) -> ConversionResult:
         """
         Business Logic:
             执行完整的PDF转换流程，将扫描PDF转换为可搜索PDF和/或Markdown。
+            可选地将OCR结果翻译为目标语言并生成翻译PDF和双语对照PDF。
             这是同步版本，适用于CLI命令行工具。
 
         Code Logic:
-            按顺序执行5个步骤:
+            按顺序执行最多7个步骤:
             1. PDFReader: PDF -> 逐页图片
             2. OCREngine: 逐页OCR识别(带进度回调)
             3. OutputParser: 解析每页OCR结果
             4. DualLayerPDFWriter: 生成双层PDF(可选)
             5. MarkdownWriter: 生成Markdown(可选)
+            6. Translator: 逐页翻译(可选，translate=True时)
+            7. TranslatedPDFWriter: 生成翻译PDF和双语对照PDF(可选)
+            翻译失败不影响OCR结果，错误记录在translation_error中。
             捕获所有异常并封装到ConversionResult中。
         """
         input_pdf = Path(input_pdf)
@@ -161,6 +182,45 @@ class ConversionPipeline:
                     output_path=output_md_path,
                 )
 
+            # 步骤6: 翻译（可选）
+            output_translated_path: Path | None = None
+            output_bilingual_path: Path | None = None
+            translation_error: str | None = None
+
+            if translate and self.translator is not None and self.translated_pdf_writer is not None:
+                try:
+                    src_lang: str = source_lang or "English"
+                    tgt_lang: str = target_lang or "Simplified Chinese"
+
+                    translated_pages: list[TranslatedPage] = []
+                    for i, parsed in enumerate(parsed_pages):
+                        self._report_progress(i + 1, total_pages, f"正在翻译第 {i + 1} 页...")
+                        tp: TranslatedPage = self.translator.translate_page(parsed, src_lang, tgt_lang)
+                        translated_pages.append(tp)
+
+                    # 步骤7: 生成翻译PDF
+                    self._report_progress(total_pages, total_pages, "正在生成翻译PDF...")
+                    lang_suffix: str = tgt_lang.split()[0][:2].lower() if tgt_lang else "tr"
+                    output_translated_path = output_dir / f"{stem}_{lang_suffix}.pdf"
+                    self.translated_pdf_writer.create_translated_pdf(
+                        page_images=page_images,
+                        translated_pages=translated_pages,
+                        output_path=output_translated_path,
+                        target_lang=tgt_lang,
+                    )
+
+                    output_bilingual_path = output_dir / f"{stem}_bilingual.pdf"
+                    self.translated_pdf_writer.create_bilingual_pdf(
+                        page_images=page_images,
+                        original_pages=parsed_pages,
+                        translated_pages=translated_pages,
+                        output_path=output_bilingual_path,
+                        target_lang=tgt_lang,
+                    )
+                except Exception as e:
+                    translation_error = str(e)
+                    logger.error(f"翻译失败: {e}", exc_info=True)
+
             elapsed: float = time.time() - start_time
             self._report_progress(total_pages, total_pages, f"转换完成! 耗时 {elapsed:.1f}s")
 
@@ -168,8 +228,11 @@ class ConversionPipeline:
                 source_pdf=input_pdf,
                 output_pdf=output_pdf_path,
                 output_markdown=output_md_path,
+                output_translated_pdf=output_translated_path,
+                output_bilingual_pdf=output_bilingual_path,
                 page_count=total_pages,
                 success=True,
+                translation_error=translation_error,
                 elapsed_seconds=elapsed,
             )
 
@@ -192,15 +255,21 @@ class ConversionPipeline:
         output_dir: str | Path,
         generate_pdf: bool = True,
         generate_markdown: bool = True,
+        translate: bool = False,
+        source_lang: str | None = None,
+        target_lang: str | None = None,
     ) -> ConversionResult:
         """
         Business Logic:
             异步版本的PDF转换流程，用于Web界面等需要非阻塞处理的场景。
             OCR步骤使用异步接口，不阻塞事件循环。
+            可选地将OCR结果翻译为目标语言并生成翻译PDF和双语对照PDF。
 
         Code Logic:
-            流程与同步版本相同，但OCR步骤使用ocr_single_image_async。
-            PDF读取、解析、写入等CPU密集操作仍为同步（它们执行很快）。
+            流程与同步版本相同，但OCR步骤使用ocr_single_image_async，
+            翻译步骤使用translate_page_async，
+            PDF生成通过run_in_executor放到线程池避免阻塞事件循环。
+            翻译失败不影响OCR结果。
         """
         input_pdf = Path(input_pdf)
         output_dir = Path(output_dir)
@@ -260,6 +329,51 @@ class ConversionPipeline:
                     output_path=output_md_path,
                 )
 
+            # 步骤6: 翻译（可选）
+            output_translated_path: Path | None = None
+            output_bilingual_path: Path | None = None
+            translation_error: str | None = None
+
+            if translate and self.translator is not None and self.translated_pdf_writer is not None:
+                try:
+                    src_lang: str = source_lang or "English"
+                    tgt_lang: str = target_lang or "Simplified Chinese"
+
+                    translated_pages: list[TranslatedPage] = []
+                    for i, parsed in enumerate(parsed_pages):
+                        self._report_progress(i + 1, total_pages, f"正在翻译第 {i + 1} 页...")
+                        tp: TranslatedPage = await self.translator.translate_page_async(parsed, src_lang, tgt_lang)
+                        translated_pages.append(tp)
+
+                    # 步骤7: 生成翻译PDF（CPU密集，放到线程池）
+                    self._report_progress(total_pages, total_pages, "正在生成翻译PDF...")
+                    lang_suffix: str = tgt_lang.split()[0][:2].lower() if tgt_lang else "tr"
+                    output_translated_path = output_dir / f"{stem}_{lang_suffix}.pdf"
+
+                    loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        None,
+                        self.translated_pdf_writer.create_translated_pdf,
+                        page_images,
+                        translated_pages,
+                        output_translated_path,
+                        tgt_lang,
+                    )
+
+                    output_bilingual_path = output_dir / f"{stem}_bilingual.pdf"
+                    await loop.run_in_executor(
+                        None,
+                        self.translated_pdf_writer.create_bilingual_pdf,
+                        page_images,
+                        parsed_pages,
+                        translated_pages,
+                        output_bilingual_path,
+                        tgt_lang,
+                    )
+                except Exception as e:
+                    translation_error = str(e)
+                    logger.error(f"翻译失败: {e}", exc_info=True)
+
             elapsed: float = time.time() - start_time
             self._report_progress(total_pages, total_pages, f"转换完成! 耗时 {elapsed:.1f}s")
 
@@ -267,8 +381,11 @@ class ConversionPipeline:
                 source_pdf=input_pdf,
                 output_pdf=output_pdf_path,
                 output_markdown=output_md_path,
+                output_translated_pdf=output_translated_path,
+                output_bilingual_pdf=output_bilingual_path,
                 page_count=total_pages,
                 success=True,
+                translation_error=translation_error,
                 elapsed_seconds=elapsed,
             )
 

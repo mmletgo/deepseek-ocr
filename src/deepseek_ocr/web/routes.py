@@ -60,6 +60,18 @@ def _get_generating_semaphore() -> asyncio.Semaphore:
     return _generating_semaphore
 
 
+# 全局翻译并发控制锁（允许2个翻译任务同时运行）
+_translation_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_translation_semaphore() -> asyncio.Semaphore:
+    """获取或创建翻译信号量（懒初始化，允许2个并发翻译任务）"""
+    global _translation_semaphore
+    if _translation_semaphore is None:
+        _translation_semaphore = asyncio.Semaphore(2)
+    return _translation_semaphore
+
+
 @router.get("/")
 async def index() -> HTMLResponse:
     """
@@ -80,6 +92,9 @@ async def index() -> HTMLResponse:
 async def upload_pdf(
     files: List[UploadFile] = File(...),
     pdf_mode: str = Form("dual_layer"),
+    translate: str = Form("false"),
+    source_lang: str = Form("English"),
+    target_lang: str = Form("Simplified Chinese"),
 ) -> list[dict[str, str]]:
     """
     Business Logic:
@@ -148,6 +163,11 @@ async def upload_pdf(
             "filename": file.filename,
             "pdf_md5": None,
             "pdf_mode": pdf_mode,
+            "translate": translate.lower() == "true",
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "result_translated_pdf": None,
+            "result_bilingual_pdf": None,
         }
 
         # 启动后台转换任务
@@ -333,6 +353,56 @@ async def _run_conversion(task_id: str) -> None:
         )
         task["result_markdown"] = str(output_md_path)
 
+        # 步骤7: 翻译（可选，失败不影响OCR结果）
+        if task.get("translate", False):
+            try:
+                from deepseek_ocr.core.translator import Translator, TranslatedPage
+                from deepseek_ocr.core.translated_pdf_writer import TranslatedPDFWriter
+
+                if config.translation.api_key:
+                    translator = Translator(config.translation)
+                    translated_writer = TranslatedPDFWriter()
+                    src_lang: str = task.get("source_lang", "English")
+                    tgt_lang: str = task.get("target_lang", "Simplified Chinese")
+
+                    # 等待翻译信号量
+                    task.update({"phase": "waiting_translate", "message": "Waiting to translate..."})
+                    translation_sem = _get_translation_semaphore()
+                    async with translation_sem:
+                        translated_pages: list[TranslatedPage] = []
+                        for i, parsed in enumerate(parsed_pages):
+                            task.update({
+                                "phase": "translating",
+                                "current": i + 1,
+                                "message": f"Translating page {i + 1}/{total_pages}",
+                            })
+                            tp: TranslatedPage = await translator.translate_page_async(parsed, src_lang, tgt_lang)
+                            translated_pages.append(tp)
+
+                        # 生成翻译PDF
+                        task.update({"phase": "generating_translated", "message": "Generating translated PDF..."})
+                        lang_suffix: str = tgt_lang.split()[0][:2].lower() if tgt_lang else "tr"
+                        translated_pdf_path = output_dir / f"{stem}_{lang_suffix}.pdf"
+                        bilingual_pdf_path = output_dir / f"{stem}_bilingual.pdf"
+
+                        await loop.run_in_executor(
+                            None,
+                            translated_writer.create_translated_pdf,
+                            page_images, translated_pages, translated_pdf_path, tgt_lang,
+                        )
+                        await loop.run_in_executor(
+                            None,
+                            translated_writer.create_bilingual_pdf,
+                            page_images, parsed_pages, translated_pages, bilingual_pdf_path, tgt_lang,
+                        )
+
+                        task["result_translated_pdf"] = str(translated_pdf_path)
+                        task["result_bilingual_pdf"] = str(bilingual_pdf_path)
+                else:
+                    logger.warning(f"Task {task_id}: Translation requested but no API key configured")
+            except Exception as translation_exc:
+                logger.error(f"Task {task_id}: Translation failed (OCR results preserved): {translation_exc}", exc_info=True)
+
         elapsed: float = time.time() - start_time
         task.update({
             "status": "completed",
@@ -407,6 +477,7 @@ async def get_progress(task_id: str) -> EventSourceResponse:
                     "status": message,
                     "phase": task.get("phase", ""),
                     "done": done,
+                    "has_translation": bool(task.get("result_translated_pdf")),
                 }
                 if error:
                     event_data["error"] = error
@@ -458,8 +529,16 @@ async def download_result(task_id: str, file_type: str) -> FileResponse:
         file_path_str = task.get("result_markdown")
         media_type = "text/markdown"
         suffix = ".md"
+    elif file_type == "translated_pdf":
+        file_path_str = task.get("result_translated_pdf")
+        media_type = "application/pdf"
+        suffix = ".pdf"
+    elif file_type == "bilingual_pdf":
+        file_path_str = task.get("result_bilingual_pdf")
+        media_type = "application/pdf"
+        suffix = ".pdf"
     else:
-        raise HTTPException(status_code=400, detail="Invalid file type. Use 'pdf' or 'markdown'")
+        raise HTTPException(status_code=400, detail="Invalid file type. Use 'pdf', 'markdown', 'translated_pdf' or 'bilingual_pdf'")
 
     if not file_path_str:
         raise HTTPException(status_code=404, detail=f"Result file ({file_type}) not available")
@@ -472,7 +551,15 @@ async def download_result(task_id: str, file_type: str) -> FileResponse:
     original_name: str = task.get("filename", "result")
     if original_name.lower().endswith(".pdf"):
         original_name = original_name[:-4]
-    download_name: str = f"{original_name}_ocr{suffix}"
+
+    if file_type == "translated_pdf":
+        download_name: str = f"{original_name}_translated{suffix}"
+    elif file_type == "bilingual_pdf":
+        download_name = f"{original_name}_bilingual{suffix}"
+    elif file_type == "pdf":
+        download_name = f"{original_name}_ocr{suffix}"
+    else:
+        download_name = f"{original_name}{suffix}"
 
     return FileResponse(
         path=str(result_path),

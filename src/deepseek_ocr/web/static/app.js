@@ -30,16 +30,19 @@
 
     // phase 文字映射
     var PHASE_LABELS = {
-        waiting_ocr:      "Waiting for GPU",
-        reading_pdf:      "Reading",
-        reading:          "Reading",
-        ocr:              "OCR",
-        parsing:          "Parsing",
-        waiting_generate: "Waiting to generate",
-        generating:       "Generating",
-        markdown:         "Markdown",
-        done:             "Done",
-        completed:        "Done",
+        waiting_ocr:           "Waiting for GPU",
+        reading_pdf:           "Reading",
+        reading:               "Reading",
+        ocr:                   "OCR",
+        parsing:               "Parsing",
+        waiting_generate:      "Waiting to generate",
+        generating:            "Generating",
+        markdown:              "Markdown",
+        waiting_translate:     "Waiting to translate",
+        translating:           "Translating",
+        generating_translated: "Generating translation",
+        done:                  "Done",
+        completed:             "Done",
     };
 
     // --- 初始化 ---
@@ -50,6 +53,7 @@
         bindFileEvents();
         bindClearBtn();
         bindSegmentedControl();
+        bindTranslateToggle();
         checkHealth();
     }
 
@@ -72,6 +76,26 @@
                 }
             });
         });
+    }
+
+    // --- 翻译 Toggle ---
+    function bindTranslateToggle() {
+        var toggle = document.getElementById('translateToggle');
+        var langSelectors = document.getElementById('langSelectors');
+        var translateSwitch = document.getElementById('translateSwitch');
+
+        if (toggle && langSelectors) {
+            toggle.addEventListener('change', function() {
+                langSelectors.style.display = toggle.checked ? 'flex' : 'none';
+            });
+        }
+        // 阻止 toggle 区域的点击冒泡到 uploadZone
+        var translateOptions = document.getElementById('translateOptions');
+        if (translateOptions) {
+            translateOptions.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
     }
 
     // --- 拖拽事件（与原来完全一致，只改 handleFile → handleFiles） ---
@@ -144,6 +168,10 @@
         });
         var pdfModeInput = document.getElementById('pdfModeInput');
         formData.append("pdf_mode", pdfModeInput ? pdfModeInput.value : "dual_layer");
+        var translateToggle = document.getElementById('translateToggle');
+        formData.append("translate", translateToggle && translateToggle.checked ? "true" : "false");
+        formData.append("source_lang", document.getElementById('sourceLang') ? document.getElementById('sourceLang').value : "English");
+        formData.append("target_lang", document.getElementById('targetLang') ? document.getElementById('targetLang').value : "Simplified Chinese");
 
         try {
             var response = await fetch("/api/upload", {
@@ -202,6 +230,12 @@
                 '</a>' +
                 '<a href="/api/download/' + taskId + '/markdown" class="download-btn" download>' +
                     downloadSvg + 'Download Markdown' +
+                '</a>' +
+                '<a href="/api/download/' + taskId + '/translated_pdf" class="download-btn download-translate" download style="display:none">' +
+                    downloadSvg + 'Translated PDF' +
+                '</a>' +
+                '<a href="/api/download/' + taskId + '/bilingual_pdf" class="download-btn download-translate" download style="display:none">' +
+                    downloadSvg + 'Bilingual PDF' +
                 '</a>' +
             '</div>' +
             '<div class="task-error" id="err-' + taskId + '" style="display:none"></div>';
@@ -263,6 +297,11 @@
         // 完成时显示下载
         if (data.done && !data.error) {
             if (dlEl) dlEl.style.display = "flex";
+            // 如果有翻译结果，显示翻译下载按钮
+            if (data.has_translation) {
+                var translateBtns = document.querySelectorAll('#task-' + taskId + ' .download-translate');
+                translateBtns.forEach(function(btn) { btn.style.display = 'inline-flex'; });
+            }
         }
 
         // 出错时显示错误

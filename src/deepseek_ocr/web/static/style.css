@@ -73,6 +73,17 @@
     --shadow-lg: 0 4px 12px rgba(0,0,0,0.3), 0 12px 40px rgba(0,0,0,0.25);
     --shadow-hover: 0 4px 16px rgba(0,0,0,0.35), 0 16px 48px rgba(0,0,0,0.3);
   }
+
+  .toggle-slider {
+    background: #48484a;
+  }
+
+  .lang-selector select {
+    background: var(--surface);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23aeaeb2' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
 }
 
 /* ========================================================
@@ -810,6 +821,141 @@ footer p {
 }
 
 /* ========================================================
+   Translation Options
+   ======================================================== */
+.translate-options {
+    margin: 20px auto 0;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.toggle-switch {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.toggle-switch input {
+    display: none;
+}
+
+.toggle-slider {
+    width: 44px;
+    height: 24px;
+    border-radius: 12px;
+    background: var(--border-strong, #d1d1d6);
+    position: relative;
+    transition: background 0.25s var(--ease-apple, ease);
+    flex-shrink: 0;
+}
+
+.toggle-slider::after {
+    content: '';
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: white;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background: var(--apple-blue, #007AFF);
+}
+
+.toggle-switch input:checked + .toggle-slider::after {
+    transform: translateX(20px);
+}
+
+.toggle-label {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--text-primary, #1d1d1f);
+}
+
+.lang-selectors {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: center;
+    animation: fadeIn 0.3s var(--ease-apple, ease);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.lang-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.lang-selector label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-secondary, #86868b);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.lang-selector select {
+    padding: 8px 32px 8px 12px;
+    border-radius: var(--radius-sm, 10px);
+    border: 1px solid var(--border-strong, #d1d1d6);
+    background: var(--surface, #ffffff);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary, #1d1d1f);
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2386868b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.lang-selector select:focus {
+    outline: none;
+    border-color: var(--apple-blue, #007AFF);
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+}
+
+.lang-arrow {
+    color: var(--text-tertiary, #aeaeb2);
+    display: flex;
+    align-items: center;
+    margin-top: 18px;
+}
+
+/* Translation phase badges */
+.phase-waiting_translate {
+    background: rgba(255, 159, 10, 0.08);
+    color: #C77800;
+}
+
+.phase-translating {
+    background: rgba(88, 86, 214, 0.08);
+    color: #5856D6;
+}
+
+.phase-generating_translated {
+    background: rgba(0, 122, 255, 0.08);
+    color: var(--apple-blue, #007AFF);
+}
+
+/* ========================================================
    Responsive — max-width 640px
    ======================================================== */
 @media (max-width: 640px) {
@@ -853,5 +999,14 @@ footer p {
 
   .task-filename {
     max-width: 100%;
+  }
+
+  .lang-selectors {
+    flex-direction: column;
+  }
+
+  .lang-arrow {
+    margin-top: 0;
+    transform: rotate(90deg);
   }
 }
