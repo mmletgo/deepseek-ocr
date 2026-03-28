@@ -358,6 +358,7 @@ async def _run_conversion(task_id: str) -> None:
             try:
                 from deepseek_ocr.core.translator import Translator, TranslatedPage
                 from deepseek_ocr.core.translated_pdf_writer import TranslatedPDFWriter
+                from deepseek_ocr.core.translation_cache import TranslationCache
 
                 if config.translation.api_key:
                     translator = Translator(config.translation)
@@ -365,19 +366,81 @@ async def _run_conversion(task_id: str) -> None:
                     src_lang: str = task.get("source_lang", "English")
                     tgt_lang: str = task.get("target_lang", "Simplified Chinese")
 
+                    # 翻译缓存
+                    translation_cache = TranslationCache(
+                        Path(config.web.upload_dir) / "translation_cache"
+                    )
+                    cached_trans_count: int = translation_cache.count_cached_pages(
+                        pdf_md5, src_lang, tgt_lang
+                    )
+                    logger.info(
+                        f"Task {task_id}: 翻译缓存 {cached_trans_count}/{total_pages} 页 "
+                        f"({src_lang} → {tgt_lang})"
+                    )
+
                     # 等待翻译信号量
                     task.update({"phase": "waiting_translate", "message": "Waiting to translate..."})
                     translation_sem = _get_translation_semaphore()
                     async with translation_sem:
-                        translated_pages: list[TranslatedPage] = []
+                        translated_pages: list[TranslatedPage | None] = [None] * total_pages
+                        pages_to_translate: list[int] = []
+
+                        # 加载缓存
                         for i, parsed in enumerate(parsed_pages):
+                            cached_tp: TranslatedPage | None = translation_cache.load_page(
+                                pdf_md5, src_lang, tgt_lang, i, parsed
+                            )
+                            if cached_tp is not None:
+                                translated_pages[i] = cached_tp
+                                logger.debug(f"Task {task_id}: 翻译页 {i} 缓存命中")
+                            else:
+                                pages_to_translate.append(i)
+
+                        # 并行翻译未缓存的页（最多3个并发）
+                        translate_concurrency = asyncio.Semaphore(3)
+                        translated_count: int = total_pages - len(pages_to_translate)
+
+                        async def _translate_one_page(page_idx: int) -> None:
+                            nonlocal translated_count
+                            async with translate_concurrency:
+                                tp: TranslatedPage = await translator.translate_page_async(
+                                    parsed_pages[page_idx], src_lang, tgt_lang
+                                )
+                                translated_pages[page_idx] = tp
+                                # 保存到缓存
+                                await loop.run_in_executor(
+                                    None,
+                                    translation_cache.save_page,
+                                    pdf_md5, src_lang, tgt_lang, page_idx, tp,
+                                )
+                                translated_count += 1
+                                task.update({
+                                    "phase": "translating",
+                                    "current": translated_count,
+                                    "message": f"Translating page {translated_count}/{total_pages}",
+                                })
+
+                        if pages_to_translate:
                             task.update({
                                 "phase": "translating",
-                                "current": i + 1,
-                                "message": f"Translating page {i + 1}/{total_pages}",
+                                "current": translated_count,
+                                "message": f"Translating... ({translated_count}/{total_pages} cached)",
                             })
-                            tp: TranslatedPage = await translator.translate_page_async(parsed, src_lang, tgt_lang)
-                            translated_pages.append(tp)
+                            await asyncio.gather(
+                                *[_translate_one_page(idx) for idx in pages_to_translate]
+                            )
+                        else:
+                            task.update({
+                                "phase": "translating",
+                                "current": total_pages,
+                                "message": f"All {total_pages} pages loaded from translation cache",
+                            })
+                            logger.info(f"Task {task_id}: 所有翻译页面均命中缓存")
+
+                        # 类型断言：此处所有页面都已翻译
+                        final_translated_pages: list[TranslatedPage] = [
+                            tp for tp in translated_pages if tp is not None
+                        ]
 
                         # 生成翻译PDF
                         task.update({"phase": "generating_translated", "message": "Generating translated PDF..."})
@@ -388,12 +451,12 @@ async def _run_conversion(task_id: str) -> None:
                         await loop.run_in_executor(
                             None,
                             translated_writer.create_translated_pdf,
-                            page_images, translated_pages, translated_pdf_path, tgt_lang,
+                            page_images, final_translated_pages, translated_pdf_path, tgt_lang,
                         )
                         await loop.run_in_executor(
                             None,
                             translated_writer.create_bilingual_pdf,
-                            page_images, parsed_pages, translated_pages, bilingual_pdf_path, tgt_lang,
+                            page_images, parsed_pages, final_translated_pages, bilingual_pdf_path, tgt_lang,
                         )
 
                         task["result_translated_pdf"] = str(translated_pdf_path)

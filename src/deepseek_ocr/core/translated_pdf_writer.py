@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from deepseek_ocr.core.pdf_reader import PageImage
-from deepseek_ocr.core.pdf_writer import _wrap_line
+from deepseek_ocr.core.pdf_writer import (
+    _wrap_line,
+    _contains_latex,
+    _clean_markdown,
+    _render_text_image,
+)
 from deepseek_ocr.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -218,9 +223,28 @@ def _render_translated_page_worker(args: tuple) -> bytes:  # type: ignore[type-a
             # 白色遮盖原始扫描的文字区域
             page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
 
-            # 渲染翻译文字（自动换行 + 字号自适应）
+            # 3路径渲染翻译文字
+            if _contains_latex(text):
+                # 含内联 LaTeX → matplotlib 渲染
+                try:
+                    png_bytes: bytes = _render_text_image(text, label, bbox_width, bbox_height)
+                    page.insert_image(block_rect, stream=png_bytes, overlay=True)
+                    # 不可见搜索层
+                    try:
+                        tw_search.append(
+                            (pdf_x1, pdf_y1 + 10), text[:200],
+                            font=helv_font, fontsize=3,
+                        )
+                    except Exception:
+                        pass
+                    continue  # 跳过后续的纯文本渲染
+                except Exception:
+                    pass  # 回退到纯文本渲染
+
+            # 纯文本渲染（或 LaTeX 渲染失败的回退）
+            clean_text: str = _clean_markdown(text.strip())
             render_font: object = cjk_font if use_cjk else helv_font
-            lines: list[str] = text.strip().split("\n")
+            lines: list[str] = clean_text.split("\n")
             fontsize_txt: float = max(
                 min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0
             )
@@ -359,9 +383,20 @@ def _render_bilingual_page_worker(args: tuple) -> bytes:  # type: ignore[type-ar
             bbox_width: float = pdf_x2 - pdf_x1
             bbox_height: float = pdf_y2 - pdf_y1
 
-            # 渲染翻译文字
+            # 3路径渲染翻译文字
+            if _contains_latex(text):
+                try:
+                    png_bytes: bytes = _render_text_image(text, label, bbox_width, bbox_height)
+                    img_rect: _fitz.Rect = _fitz.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
+                    page.insert_image(img_rect, stream=png_bytes, overlay=True)
+                    continue
+                except Exception:
+                    pass  # 回退到纯文本
+
+            # 纯文本渲染（或 LaTeX 渲染失败的回退）
+            clean_text: str = _clean_markdown(text.strip())
             render_font: object = cjk_font if use_cjk else helv_font
-            lines: list[str] = text.strip().split("\n")
+            lines: list[str] = clean_text.split("\n")
             fontsize_txt: float = max(
                 min(bbox_height / max(len(lines), 1) * 0.75, 14.0), 3.0
             )

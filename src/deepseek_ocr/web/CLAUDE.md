@@ -38,6 +38,16 @@
 - 每次转换前检查每页是否已缓存，仅OCR未缓存的页
 - 全部命中缓存时直接跳过OCR阶段
 
+## 翻译缓存与断点续传
+- 缓存路径: `{upload_dir}/translation_cache/{pdf_md5}/{src_lang}_{tgt_lang}/page_NNNN.json`
+- 翻译前逐页检查缓存，缓存命中直接加载 TranslatedPage，未命中的页加入待翻译列表
+- 全部命中缓存时跳过翻译 API 调用
+
+## 翻译并行
+- 未缓存的页通过 `asyncio.gather` + `asyncio.Semaphore(3)` 实现最多3页并行翻译
+- 每页翻译完成后立即写入缓存（支持断点续传）
+- 进度计数器 `translated_count` 在每页完成后递增并更新任务状态
+
 ## 前端设计风格
 - **Apple 设计语言**: 温灰背景 (#f5f5f7)、多层阴影 (box-shadow)、大圆角 (16px+)、pill 形按钮
 - **暗色模式支持**: 通过 `prefers-color-scheme: dark` 媒体查询自动切换暗色配色
@@ -52,8 +62,10 @@
 
 ## 前端翻译选项
 - iOS 风格 toggle 开关 "Translate after OCR"，点击后展开语言选择器
-- 源语言选择器 (From): English/Japanese/German/French/Spanish/Russian
-- 目标语言选择器 (To): 简体中文/繁體中文/日本語/한국어/English/Français/Deutsch/Español
+- From/To 共享统一语言列表（JS 中 `LANGUAGES` 数组）：English/简体中文/繁體中文/日本語/한국어/Deutsch/Français/Español/Русский
+- 互斥逻辑：From 选中的语言不出现在 To 列表中，反之亦然（`updateLangOptions()` 动态渲染）
+- 默认值：From=English, To=Simplified Chinese
+- HTML 中 select 为空壳，选项由 app.js 在 `bindTranslateToggle()` 初始化时动态填充
 - FormData 附带 `translate`、`source_lang`、`target_lang` 字段
 - 翻译完成后显示额外下载按钮：Translated PDF 和 Bilingual PDF
 - 翻译区域 click 事件阻止冒泡，避免触发 uploadZone 的文件选择

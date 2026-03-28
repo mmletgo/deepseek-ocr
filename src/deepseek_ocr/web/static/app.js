@@ -28,6 +28,19 @@
     var taskRegistry = {};
     var isUploading = false;
 
+    // 统一语言列表
+    var LANGUAGES = [
+        { value: "English", label: "English" },
+        { value: "Simplified Chinese", label: "简体中文" },
+        { value: "Traditional Chinese", label: "繁體中文" },
+        { value: "Japanese", label: "日本語" },
+        { value: "Korean", label: "한국어" },
+        { value: "German", label: "Deutsch" },
+        { value: "French", label: "Français" },
+        { value: "Spanish", label: "Español" },
+        { value: "Russian", label: "Русский" },
+    ];
+
     // phase 文字映射
     var PHASE_LABELS = {
         waiting_ocr:           "Waiting for GPU",
@@ -78,11 +91,52 @@
         });
     }
 
+    // --- 语言选项动态渲染（互斥逻辑） ---
+    function updateLangOptions() {
+        var sourceLang = document.getElementById('sourceLang');
+        var targetLang = document.getElementById('targetLang');
+        var srcVal = sourceLang.value || 'English';
+        var tgtVal = targetLang.value || 'Simplified Chinese';
+
+        // 清空并重建 source options（排除 target 选中的语言）
+        sourceLang.innerHTML = '';
+        LANGUAGES.forEach(function(lang) {
+            if (lang.value !== tgtVal) {
+                var opt = document.createElement('option');
+                opt.value = lang.value;
+                opt.textContent = lang.label;
+                if (lang.value === srcVal) opt.selected = true;
+                sourceLang.appendChild(opt);
+            }
+        });
+
+        // 清空并重建 target options（排除 source 选中的语言）
+        targetLang.innerHTML = '';
+        LANGUAGES.forEach(function(lang) {
+            if (lang.value !== srcVal) {
+                var opt = document.createElement('option');
+                opt.value = lang.value;
+                opt.textContent = lang.label;
+                if (lang.value === tgtVal) opt.selected = true;
+                targetLang.appendChild(opt);
+            }
+        });
+    }
+
     // --- 翻译 Toggle ---
     function bindTranslateToggle() {
         var toggle = document.getElementById('translateToggle');
         var langSelectors = document.getElementById('langSelectors');
         var translateSwitch = document.getElementById('translateSwitch');
+
+        // 初始化语言选项
+        updateLangOptions();
+
+        // 绑定互斥逻辑
+        var sourceLang = document.getElementById('sourceLang');
+        var targetLang = document.getElementById('targetLang');
+        if (sourceLang) sourceLang.addEventListener('change', updateLangOptions);
+        if (targetLang) targetLang.addEventListener('change', updateLangOptions);
 
         if (toggle && langSelectors) {
             toggle.addEventListener('change', function() {

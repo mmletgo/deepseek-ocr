@@ -11,6 +11,7 @@
 | `markdown_writer.py` | 输出Markdown文件 (MarkdownWriter) |
 | `translator.py` | 通过 OpenAI 兼容接口调用 LLM 翻译文本块 (Translator, TranslatedPage) |
 | `translated_pdf_writer.py` | 生成翻译版PDF: 目标语言PDF + 双语对照PDF (TranslatedPDFWriter) |
+| `translation_cache.py` | 翻译结果持久化缓存，按 PDF MD5 + 语言对存储 (TranslationCache) |
 | `pipeline.py` | 端到端编排所有模块 (ConversionPipeline, ConversionResult) |
 
 ## 关键数据结构
@@ -53,6 +54,10 @@
 - 双语对照：页面宽度翻倍，左半页原图，右半页白色背景+翻译文字，中间灰色分隔线
 - 多进程并行：ProcessPoolExecutor(forkserver)，worker函数为模块级函数
 - 数据序列化：TextBlock → dict 跨进程传递（避免pickle问题）
+- 三路径渲染（复用 pdf_writer.py 的 `_contains_latex`, `_clean_markdown`, `_render_text_image`）：
+  - 含内联 LaTeX(`\(...\)`) 的翻译文本 → `_render_text_image()` matplotlib 渲染为 PNG 嵌入，失败静默回退纯文本
+  - 纯文本 → `_clean_markdown()` 清理 Markdown 标记（如 `####` 标题）后矢量文字渲染
+  - 目标语言PDF：LaTeX 成功时写入不可见搜索层；双语对照PDF：LaTeX 渲染 PNG 嵌入右半页
 
 ## 降级策略
 OCR输出无坐标标签时 → 整页文本作为单个TextBlock(bbox=[0,0,999,999])
