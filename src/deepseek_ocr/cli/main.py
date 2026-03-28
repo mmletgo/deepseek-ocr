@@ -304,7 +304,7 @@ def convert(
     translation_base_url: str | None,
     translation_api_key: str | None,
 ) -> None:
-    """将扫描PDF转换为可搜索PDF和Markdown，可选启用翻译。"""
+    """将PDF转换为可搜索PDF和Markdown，可选启用翻译。支持扫描版和文本版PDF，自动检测类型。"""
     _run_convert(
         input_path=input_path,
         output_dir=output_dir,
@@ -349,7 +349,7 @@ def translate(
     translation_base_url: str | None,
     translation_api_key: str | None,
 ) -> None:
-    """翻译扫描PDF：先OCR识别再翻译为目标语言。等效于 convert --translate。"""
+    """翻译PDF为目标语言。支持扫描版(OCR+翻译)和文本版(直接翻译)PDF，自动检测类型。等效于 convert --translate。"""
     _run_convert(
         input_path=input_path,
         output_dir=output_dir,

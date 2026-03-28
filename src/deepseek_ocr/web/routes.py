@@ -231,140 +231,179 @@ async def _run_conversion(task_id: str) -> None:
 
         start_time: float = time.time()
 
-        # 步骤1: 读取PDF，渲染为图片
-        task.update({"phase": "reading", "message": "Reading PDF..."})
-        page_images: list[PageImage] = await loop.run_in_executor(
-            None, pdf_reader.read_pdf, input_file
-        )
-        total_pages: int = len(page_images)
-        task["total"] = total_pages
-        logger.info(f"Task {task_id}: PDF读取完成, 共 {total_pages} 页")
+        # 步骤0: 检测PDF类型
+        from deepseek_ocr.core.pdf_type_detector import PDFTypeDetector, PDFTypeInfo
+        detector = PDFTypeDetector()
+        pdf_type_info: PDFTypeInfo = await loop.run_in_executor(None, detector.detect, input_file)
+        is_text_pdf: bool = pdf_type_info.pdf_type == "text"
+        task["pdf_type"] = pdf_type_info.pdf_type
+        logger.info(f"Task {task_id}: PDF类型={pdf_type_info.pdf_type}, 平均字符={pdf_type_info.avg_chars_per_page:.0f}")
 
-        # 步骤2: 计算 MD5，初始化缓存
-        task.update({"message": "Computing MD5..."})
-        pdf_md5: str = await loop.run_in_executor(None, OCRCache.compute_md5, input_file)
-        task["pdf_md5"] = pdf_md5
-        ocr_cache = OCRCache(Path(config.web.upload_dir) / "ocr_cache")
-        cached_count: int = ocr_cache.count_cached_pages(pdf_md5)
-        logger.info(f"Task {task_id}: PDF MD5={pdf_md5}, 已缓存 {cached_count}/{total_pages} 页")
+        if is_text_pdf:
+            # 文本PDF路径：直接提取文本，跳过OCR
+            from deepseek_ocr.core.text_pdf_extractor import TextPDFExtractor
 
-        # 步骤3: OCR（检查缓存，跳过已缓存页）
-        pages_needing_ocr: list[int] = [
-            i for i in range(total_pages) if not ocr_cache.is_page_cached(pdf_md5, i)
-        ]
+            task.update({"phase": "extracting_text", "message": "Extracting text from PDF..."})
+            extractor = TextPDFExtractor()
+            parsed_pages: list[ParsedPage] = await loop.run_in_executor(
+                None, extractor.extract_all_pages, input_file
+            )
+            total_pages: int = len(parsed_pages)
+            task["total"] = total_pages
+            page_images = None  # 文本PDF不需要扫描图片
 
-        ocr_semaphore = _get_ocr_semaphore()
-        ocr_results: list[OCRResult] = []
+            # 计算MD5（翻译缓存需要）
+            pdf_md5: str = await loop.run_in_executor(None, OCRCache.compute_md5, input_file)
+            task["pdf_md5"] = pdf_md5
 
-        if pages_needing_ocr:
-            task.update({"phase": "waiting_ocr", "message": "Waiting for GPU..."})
-            async with ocr_semaphore:
-                for i, page_img in enumerate(page_images):
-                    cached_result: OCRResult | None = ocr_cache.load_page(pdf_md5, i)
-                    if cached_result is not None:
-                        # 缓存命中，直接使用
-                        ocr_results.append(cached_result)
+            # 跳过 DualLayerPDF 生成（文本PDF已有文字层）
+            # 直接生成 Markdown
+            output_md_path = output_dir / f"{stem}.md"
+            task.update({"phase": "markdown", "message": "Generating Markdown..."})
+            await loop.run_in_executor(
+                None,
+                markdown_writer.write,
+                parsed_pages,
+                output_md_path,
+            )
+            task["result_markdown"] = str(output_md_path)
+        else:
+            # 扫描PDF路径：现有流程不变（步骤1-6）
+
+            # 步骤1: 读取PDF，渲染为图片
+            task.update({"phase": "reading", "message": "Reading PDF..."})
+            page_images: list[PageImage] = await loop.run_in_executor(
+                None, pdf_reader.read_pdf, input_file
+            )
+            total_pages: int = len(page_images)
+            task["total"] = total_pages
+            logger.info(f"Task {task_id}: PDF读取完成, 共 {total_pages} 页")
+
+            # 步骤2: 计算 MD5，初始化缓存
+            task.update({"message": "Computing MD5..."})
+            pdf_md5: str = await loop.run_in_executor(None, OCRCache.compute_md5, input_file)
+            task["pdf_md5"] = pdf_md5
+            ocr_cache = OCRCache(Path(config.web.upload_dir) / "ocr_cache")
+            cached_count: int = ocr_cache.count_cached_pages(pdf_md5)
+            logger.info(f"Task {task_id}: PDF MD5={pdf_md5}, 已缓存 {cached_count}/{total_pages} 页")
+
+            # 步骤3: OCR（检查缓存，跳过已缓存页）
+            pages_needing_ocr: list[int] = [
+                i for i in range(total_pages) if not ocr_cache.is_page_cached(pdf_md5, i)
+            ]
+
+            ocr_semaphore = _get_ocr_semaphore()
+            ocr_results: list[OCRResult] = []
+
+            if pages_needing_ocr:
+                task.update({"phase": "waiting_ocr", "message": "Waiting for GPU..."})
+                async with ocr_semaphore:
+                    for i, page_img in enumerate(page_images):
+                        cached_result: OCRResult | None = ocr_cache.load_page(pdf_md5, i)
+                        if cached_result is not None:
+                            # 缓存命中，直接使用
+                            ocr_results.append(cached_result)
+                            task.update({
+                                "phase": "ocr",
+                                "current": i + 1,
+                                "message": f"OCR page {i + 1}/{total_pages} (cached)",
+                            })
+                            logger.debug(f"Task {task_id}: 页 {i} 缓存命中，跳过OCR")
+                            continue
+
+                        # 调用 OCR
                         task.update({
                             "phase": "ocr",
                             "current": i + 1,
-                            "message": f"OCR page {i + 1}/{total_pages} (cached)",
+                            "message": f"OCR page {i + 1}/{total_pages}",
                         })
-                        logger.debug(f"Task {task_id}: 页 {i} 缓存命中，跳过OCR")
-                        continue
-
-                    # 调用 OCR
-                    task.update({
-                        "phase": "ocr",
-                        "current": i + 1,
-                        "message": f"OCR page {i + 1}/{total_pages}",
-                    })
-                    result: OCRResult = await ocr_engine.ocr_single_image_async(
-                        image_data=page_img.image_bytes,
-                        page_index=page_img.page_index,
-                    )
-                    # OCR 输出异常（文本超长/重复）时重试，最多2次
-                    from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
-                    for _ocr_retry in range(2):
-                        if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
-                            break
-                        logger.warning(
-                            f"Task {task_id}: 页 {i} OCR输出异常 "
-                            f"({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试"
-                        )
-                        result = await ocr_engine.ocr_single_image_async(
+                        result: OCRResult = await ocr_engine.ocr_single_image_async(
                             image_data=page_img.image_bytes,
                             page_index=page_img.page_index,
                         )
-                    # 保存到缓存（异常输出会被 save_page 拒绝）
-                    await loop.run_in_executor(
-                        None, ocr_cache.save_page, pdf_md5, i, result
-                    )
-                    ocr_results.append(result)
-                    if not result.success:
-                        logger.warning(f"Task {task_id}: 页 {i} OCR失败: {result.error_msg}")
-        else:
-            # 全部缓存命中，直接跳过 OCR
+                        # OCR 输出异常（文本超长/重复）时重试，最多2次
+                        from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
+                        for _ocr_retry in range(2):
+                            if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
+                                break
+                            logger.warning(
+                                f"Task {task_id}: 页 {i} OCR输出异常 "
+                                f"({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试"
+                            )
+                            result = await ocr_engine.ocr_single_image_async(
+                                image_data=page_img.image_bytes,
+                                page_index=page_img.page_index,
+                            )
+                        # 保存到缓存（异常输出会被 save_page 拒绝）
+                        await loop.run_in_executor(
+                            None, ocr_cache.save_page, pdf_md5, i, result
+                        )
+                        ocr_results.append(result)
+                        if not result.success:
+                            logger.warning(f"Task {task_id}: 页 {i} OCR失败: {result.error_msg}")
+            else:
+                # 全部缓存命中，直接跳过 OCR
+                task.update({
+                    "phase": "ocr",
+                    "current": total_pages,
+                    "message": f"Loading {total_pages} pages from cache...",
+                })
+                for i in range(total_pages):
+                    cached: OCRResult | None = ocr_cache.load_page(pdf_md5, i)
+                    if cached is not None:
+                        ocr_results.append(cached)
+                    else:
+                        # 理论上不应发生（is_page_cached 检查通过），防御性处理
+                        logger.warning(f"Task {task_id}: 页 {i} 缓存读取失败，结果为空")
+                        ocr_results.append(OCRResult(
+                            page_index=i,
+                            raw_text="",
+                            success=False,
+                            error_msg="Cache read failed unexpectedly",
+                        ))
+                logger.info(f"Task {task_id}: 所有页面均命中缓存，跳过OCR")
+
+            # 步骤4: 解析OCR结果
             task.update({
-                "phase": "ocr",
+                "phase": "parsing",
                 "current": total_pages,
-                "message": f"Loading {total_pages} pages from cache...",
+                "message": "Parsing OCR results...",
             })
-            for i in range(total_pages):
-                cached: OCRResult | None = ocr_cache.load_page(pdf_md5, i)
-                if cached is not None:
-                    ocr_results.append(cached)
-                else:
-                    # 理论上不应发生（is_page_cached 检查通过），防御性处理
-                    logger.warning(f"Task {task_id}: 页 {i} 缓存读取失败，结果为空")
-                    ocr_results.append(OCRResult(
-                        page_index=i,
-                        raw_text="",
-                        success=False,
-                        error_msg="Cache read failed unexpectedly",
-                    ))
-            logger.info(f"Task {task_id}: 所有页面均命中缓存，跳过OCR")
+            parsed_pages: list[ParsedPage] = []
+            for ocr_result in ocr_results:
+                parsed: ParsedPage = parser.parse(
+                    raw_text=ocr_result.raw_text,
+                    page_index=ocr_result.page_index,
+                )
+                parsed_pages.append(parsed)
 
-        # 步骤4: 解析OCR结果
-        task.update({
-            "phase": "parsing",
-            "current": total_pages,
-            "message": "Parsing OCR results...",
-        })
-        parsed_pages: list[ParsedPage] = []
-        for ocr_result in ocr_results:
-            parsed: ParsedPage = parser.parse(
-                raw_text=ocr_result.raw_text,
-                page_index=ocr_result.page_index,
-            )
-            parsed_pages.append(parsed)
+            # 步骤5: 生成双层PDF（加 generating 串行锁，避免 PyMuPDF GIL 争用）
+            output_pdf_path = output_dir / f"{stem}_ocr.pdf"
+            task.update({"phase": "waiting_generate", "message": "Waiting to generate..."})
+            generating_semaphore = _get_generating_semaphore()
+            async with generating_semaphore:
+                task.update({"phase": "generating", "message": "Generating PDF..."})
+                await loop.run_in_executor(
+                    None,
+                    pdf_writer.create_dual_layer_pdf,
+                    page_images,
+                    parsed_pages,
+                    output_pdf_path,
+                    pdf_mode,
+                )
 
-        # 步骤5: 生成双层PDF（加 generating 串行锁，避免 PyMuPDF GIL 争用）
-        output_pdf_path = output_dir / f"{stem}_ocr.pdf"
-        task.update({"phase": "waiting_generate", "message": "Waiting to generate..."})
-        generating_semaphore = _get_generating_semaphore()
-        async with generating_semaphore:
-            task.update({"phase": "generating", "message": "Generating PDF..."})
+            task["result_pdf"] = str(output_pdf_path)
+
+            # 步骤6: 生成Markdown（在 generating 信号量外执行）
+            output_md_path = output_dir / f"{stem}.md"
+            task.update({"phase": "markdown", "message": "Generating Markdown..."})
             await loop.run_in_executor(
                 None,
-                pdf_writer.create_dual_layer_pdf,
-                page_images,
+                markdown_writer.write,
                 parsed_pages,
-                output_pdf_path,
-                pdf_mode,
+                output_md_path,
             )
-
-        task["result_pdf"] = str(output_pdf_path)
-
-        # 步骤6: 生成Markdown（在 generating 信号量外执行）
-        output_md_path = output_dir / f"{stem}.md"
-        task.update({"phase": "markdown", "message": "Generating Markdown..."})
-        await loop.run_in_executor(
-            None,
-            markdown_writer.write,
-            parsed_pages,
-            output_md_path,
-        )
-        task["result_markdown"] = str(output_md_path)
+            task["result_markdown"] = str(output_md_path)
 
         # 步骤7: 翻译（可选，失败不影响OCR结果）
         if task.get("translate", False):
@@ -472,16 +511,30 @@ async def _run_conversion(task_id: str) -> None:
                         translated_pdf_path = output_dir / f"{stem}_{lang_suffix}.pdf"
                         bilingual_pdf_path = output_dir / f"{stem}_bilingual.pdf"
 
-                        await loop.run_in_executor(
-                            None,
-                            translated_writer.create_translated_pdf,
-                            page_images, final_translated_pages, translated_pdf_path, tgt_lang,
-                        )
-                        await loop.run_in_executor(
-                            None,
-                            translated_writer.create_bilingual_pdf,
-                            page_images, parsed_pages, final_translated_pages, bilingual_pdf_path, tgt_lang,
-                        )
+                        if is_text_pdf:
+                            from deepseek_ocr.core.text_pdf_translated_writer import TextPDFTranslatedWriter
+                            text_writer = TextPDFTranslatedWriter()
+                            await loop.run_in_executor(
+                                None,
+                                text_writer.create_translated_pdf,
+                                input_file, final_translated_pages, translated_pdf_path, tgt_lang,
+                            )
+                            await loop.run_in_executor(
+                                None,
+                                text_writer.create_bilingual_pdf,
+                                input_file, parsed_pages, final_translated_pages, bilingual_pdf_path, tgt_lang,
+                            )
+                        else:
+                            await loop.run_in_executor(
+                                None,
+                                translated_writer.create_translated_pdf,
+                                page_images, final_translated_pages, translated_pdf_path, tgt_lang,
+                            )
+                            await loop.run_in_executor(
+                                None,
+                                translated_writer.create_bilingual_pdf,
+                                page_images, parsed_pages, final_translated_pages, bilingual_pdf_path, tgt_lang,
+                            )
 
                         task["result_translated_pdf"] = str(translated_pdf_path)
                         task["result_bilingual_pdf"] = str(bilingual_pdf_path)

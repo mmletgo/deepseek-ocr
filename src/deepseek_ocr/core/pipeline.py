@@ -24,6 +24,9 @@ from deepseek_ocr.core.pdf_writer import DualLayerPDFWriter
 from deepseek_ocr.core.markdown_writer import MarkdownWriter
 from deepseek_ocr.core.translator import Translator, TranslatedPage
 from deepseek_ocr.core.translated_pdf_writer import TranslatedPDFWriter
+from deepseek_ocr.core.pdf_type_detector import PDFTypeDetector
+from deepseek_ocr.core.text_pdf_extractor import TextPDFExtractor
+from deepseek_ocr.core.text_pdf_translated_writer import TextPDFTranslatedWriter
 from deepseek_ocr.utils.logger import logger
 
 
@@ -40,6 +43,7 @@ class ConversionResult:
     output_translated_pdf: Path | None = None    # 翻译后PDF路径
     output_bilingual_pdf: Path | None = None     # 双语对照PDF路径
     translation_error: str | None = None         # 翻译错误（不影响OCR结果）
+    pdf_type: str = "scanned"  # "text" | "scanned"
 
 
 class ConversionPipeline:
@@ -132,47 +136,63 @@ class ConversionPipeline:
         stem: str = input_pdf.stem
 
         try:
-            # 步骤1: 读取PDF，渲染为图片
-            self._report_progress(0, 1, "正在读取PDF...")
-            page_images: list[PageImage] = self.pdf_reader.read_pdf(input_pdf)
-            total_pages: int = len(page_images)
-            logger.info(f"PDF读取完成, 共 {total_pages} 页")
+            # 步骤0: 检测PDF类型
+            self._report_progress(0, 1, "正在检测PDF类型...")
+            detector: PDFTypeDetector = PDFTypeDetector()
+            from deepseek_ocr.core.pdf_type_detector import PDFTypeInfo
+            pdf_type_info: PDFTypeInfo = detector.detect(input_pdf)
+            is_text_pdf: bool = pdf_type_info.pdf_type == "text"
 
-            # 步骤2: 逐页OCR
-            from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
-            ocr_results: list[OCRResult] = []
-            for i, page_img in enumerate(page_images):
-                self._report_progress(i + 1, total_pages, f"正在识别第 {i + 1} 页...")
-                result: OCRResult = self.ocr_engine.ocr_single_image(
-                    image_data=page_img.image_bytes,
-                    page_index=page_img.page_index,
-                )
-                # OCR 输出异常（文本超长/重复）时重试
-                for _ocr_retry in range(2):
-                    if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
-                        break
-                    logger.warning(f"页 {i}: OCR输出异常 ({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试")
-                    result = self.ocr_engine.ocr_single_image(
+            if is_text_pdf:
+                # 文本PDF路径：直接提取文本，跳过OCR
+                self._report_progress(0, 1, "文本PDF，正在提取文本...")
+                extractor: TextPDFExtractor = TextPDFExtractor()
+                parsed_pages: list[ParsedPage] = extractor.extract_all_pages(input_pdf)
+                page_images: list[PageImage] | None = None
+                total_pages: int = len(parsed_pages)
+                logger.info(f"文本PDF提取完成, 共 {total_pages} 页")
+            else:
+                # 扫描PDF路径：现有流程不变
+                # 步骤1: 读取PDF，渲染为图片
+                self._report_progress(0, 1, "正在读取PDF...")
+                page_images = self.pdf_reader.read_pdf(input_pdf)
+                total_pages = len(page_images)
+                logger.info(f"PDF读取完成, 共 {total_pages} 页")
+
+                # 步骤2: 逐页OCR
+                from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
+                ocr_results: list[OCRResult] = []
+                for i, page_img in enumerate(page_images):
+                    self._report_progress(i + 1, total_pages, f"正在识别第 {i + 1} 页...")
+                    result: OCRResult = self.ocr_engine.ocr_single_image(
                         image_data=page_img.image_bytes,
                         page_index=page_img.page_index,
                     )
-                ocr_results.append(result)
-                if not result.success:
-                    logger.warning(f"页 {i}: OCR失败: {result.error_msg}")
+                    for _ocr_retry in range(2):
+                        if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
+                            break
+                        logger.warning(f"页 {i}: OCR输出异常 ({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试")
+                        result = self.ocr_engine.ocr_single_image(
+                            image_data=page_img.image_bytes,
+                            page_index=page_img.page_index,
+                        )
+                    ocr_results.append(result)
+                    if not result.success:
+                        logger.warning(f"页 {i}: OCR失败: {result.error_msg}")
 
-            # 步骤3: 解析OCR结果
-            self._report_progress(total_pages, total_pages, "正在解析OCR结果...")
-            parsed_pages: list[ParsedPage] = []
-            for ocr_result in ocr_results:
-                parsed: ParsedPage = self.parser.parse(
-                    raw_text=ocr_result.raw_text,
-                    page_index=ocr_result.page_index,
-                )
-                parsed_pages.append(parsed)
+                # 步骤3: 解析OCR结果
+                self._report_progress(total_pages, total_pages, "正在解析OCR结果...")
+                parsed_pages = []
+                for ocr_result in ocr_results:
+                    parsed: ParsedPage = self.parser.parse(
+                        raw_text=ocr_result.raw_text,
+                        page_index=ocr_result.page_index,
+                    )
+                    parsed_pages.append(parsed)
 
-            # 步骤4: 生成PDF
+            # 步骤4: 生成PDF（文本PDF跳过，已有文字层）
             output_pdf_path: Path | None = None
-            if generate_pdf:
+            if generate_pdf and not is_text_pdf and page_images is not None:
                 self._report_progress(total_pages, total_pages, f"正在生成PDF ({self.pdf_mode}模式)...")
                 output_pdf_path = output_dir / f"{stem}_ocr.pdf"
                 self.pdf_writer.create_dual_layer_pdf(
@@ -197,7 +217,7 @@ class ConversionPipeline:
             output_bilingual_path: Path | None = None
             translation_error: str | None = None
 
-            if translate and self.translator is not None and self.translated_pdf_writer is not None:
+            if translate and self.translator is not None:
                 try:
                     src_lang: str = source_lang or "English"
                     tgt_lang: str = target_lang or "Simplified Chinese"
@@ -234,21 +254,39 @@ class ConversionPipeline:
                     self._report_progress(total_pages, total_pages, "正在生成翻译PDF...")
                     lang_suffix: str = tgt_lang.split()[0][:2].lower() if tgt_lang else "tr"
                     output_translated_path = output_dir / f"{stem}_{lang_suffix}.pdf"
-                    self.translated_pdf_writer.create_translated_pdf(
-                        page_images=page_images,
-                        translated_pages=translated_pages,
-                        output_path=output_translated_path,
-                        target_lang=tgt_lang,
-                    )
-
                     output_bilingual_path = output_dir / f"{stem}_bilingual.pdf"
-                    self.translated_pdf_writer.create_bilingual_pdf(
-                        page_images=page_images,
-                        original_pages=parsed_pages,
-                        translated_pages=translated_pages,
-                        output_path=output_bilingual_path,
-                        target_lang=tgt_lang,
-                    )
+
+                    if is_text_pdf:
+                        # 文本PDF: 使用 TextPDFTranslatedWriter
+                        text_translated_writer: TextPDFTranslatedWriter = TextPDFTranslatedWriter()
+                        text_translated_writer.create_translated_pdf(
+                            source_pdf_path=input_pdf,
+                            translated_pages=translated_pages,
+                            output_path=output_translated_path,
+                            target_lang=tgt_lang,
+                        )
+                        text_translated_writer.create_bilingual_pdf(
+                            source_pdf_path=input_pdf,
+                            original_pages=parsed_pages,
+                            translated_pages=translated_pages,
+                            output_path=output_bilingual_path,
+                            target_lang=tgt_lang,
+                        )
+                    elif self.translated_pdf_writer is not None and page_images is not None:
+                        # 扫描PDF: 使用现有 TranslatedPDFWriter
+                        self.translated_pdf_writer.create_translated_pdf(
+                            page_images=page_images,
+                            translated_pages=translated_pages,
+                            output_path=output_translated_path,
+                            target_lang=tgt_lang,
+                        )
+                        self.translated_pdf_writer.create_bilingual_pdf(
+                            page_images=page_images,
+                            original_pages=parsed_pages,
+                            translated_pages=translated_pages,
+                            output_path=output_bilingual_path,
+                            target_lang=tgt_lang,
+                        )
                 except Exception as e:
                     translation_error = str(e)
                     logger.error(f"翻译失败: {e}", exc_info=True)
@@ -266,6 +304,7 @@ class ConversionPipeline:
                 success=True,
                 translation_error=translation_error,
                 elapsed_seconds=elapsed,
+                pdf_type=pdf_type_info.pdf_type,
             )
 
         except Exception as e:
@@ -311,47 +350,63 @@ class ConversionPipeline:
         stem: str = input_pdf.stem
 
         try:
-            # 步骤1: 读取PDF，渲染为图片（CPU密集但很快，同步即可）
-            self._report_progress(0, 1, "正在读取PDF...")
-            page_images: list[PageImage] = self.pdf_reader.read_pdf(input_pdf)
-            total_pages: int = len(page_images)
-            logger.info(f"PDF读取完成, 共 {total_pages} 页")
+            # 步骤0: 检测PDF类型
+            self._report_progress(0, 1, "正在检测PDF类型...")
+            detector: PDFTypeDetector = PDFTypeDetector()
+            from deepseek_ocr.core.pdf_type_detector import PDFTypeInfo
+            pdf_type_info: PDFTypeInfo = detector.detect(input_pdf)
+            is_text_pdf: bool = pdf_type_info.pdf_type == "text"
 
-            # 步骤2: 逐页异步OCR
-            from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
-            ocr_results: list[OCRResult] = []
-            for i, page_img in enumerate(page_images):
-                self._report_progress(i + 1, total_pages, f"正在识别第 {i + 1} 页...")
-                result: OCRResult = await self.ocr_engine.ocr_single_image_async(
-                    image_data=page_img.image_bytes,
-                    page_index=page_img.page_index,
-                )
-                # OCR 输出异常（文本超长/重复）时重试
-                for _ocr_retry in range(2):
-                    if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
-                        break
-                    logger.warning(f"页 {i}: OCR输出异常 ({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试")
-                    result = await self.ocr_engine.ocr_single_image_async(
+            if is_text_pdf:
+                # 文本PDF路径：直接提取文本，跳过OCR
+                self._report_progress(0, 1, "文本PDF，正在提取文本...")
+                extractor: TextPDFExtractor = TextPDFExtractor()
+                parsed_pages: list[ParsedPage] = extractor.extract_all_pages(input_pdf)
+                page_images: list[PageImage] | None = None
+                total_pages: int = len(parsed_pages)
+                logger.info(f"文本PDF提取完成, 共 {total_pages} 页")
+            else:
+                # 扫描PDF路径：现有流程不变
+                # 步骤1: 读取PDF，渲染为图片（CPU密集但很快，同步即可）
+                self._report_progress(0, 1, "正在读取PDF...")
+                page_images = self.pdf_reader.read_pdf(input_pdf)
+                total_pages = len(page_images)
+                logger.info(f"PDF读取完成, 共 {total_pages} 页")
+
+                # 步骤2: 逐页异步OCR
+                from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
+                ocr_results: list[OCRResult] = []
+                for i, page_img in enumerate(page_images):
+                    self._report_progress(i + 1, total_pages, f"正在识别第 {i + 1} 页...")
+                    result: OCRResult = await self.ocr_engine.ocr_single_image_async(
                         image_data=page_img.image_bytes,
                         page_index=page_img.page_index,
                     )
-                ocr_results.append(result)
-                if not result.success:
-                    logger.warning(f"页 {i}: OCR失败: {result.error_msg}")
+                    for _ocr_retry in range(2):
+                        if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
+                            break
+                        logger.warning(f"页 {i}: OCR输出异常 ({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试")
+                        result = await self.ocr_engine.ocr_single_image_async(
+                            image_data=page_img.image_bytes,
+                            page_index=page_img.page_index,
+                        )
+                    ocr_results.append(result)
+                    if not result.success:
+                        logger.warning(f"页 {i}: OCR失败: {result.error_msg}")
 
-            # 步骤3: 解析OCR结果
-            self._report_progress(total_pages, total_pages, "正在解析OCR结果...")
-            parsed_pages: list[ParsedPage] = []
-            for ocr_result in ocr_results:
-                parsed: ParsedPage = self.parser.parse(
-                    raw_text=ocr_result.raw_text,
-                    page_index=ocr_result.page_index,
-                )
-                parsed_pages.append(parsed)
+                # 步骤3: 解析OCR结果
+                self._report_progress(total_pages, total_pages, "正在解析OCR结果...")
+                parsed_pages = []
+                for ocr_result in ocr_results:
+                    parsed: ParsedPage = self.parser.parse(
+                        raw_text=ocr_result.raw_text,
+                        page_index=ocr_result.page_index,
+                    )
+                    parsed_pages.append(parsed)
 
-            # 步骤4: 生成PDF
+            # 步骤4: 生成PDF（文本PDF跳过，已有文字层）
             output_pdf_path: Path | None = None
-            if generate_pdf:
+            if generate_pdf and not is_text_pdf and page_images is not None:
                 self._report_progress(total_pages, total_pages, f"正在生成PDF ({self.pdf_mode}模式)...")
                 output_pdf_path = output_dir / f"{stem}_ocr.pdf"
                 self.pdf_writer.create_dual_layer_pdf(
@@ -376,7 +431,7 @@ class ConversionPipeline:
             output_bilingual_path: Path | None = None
             translation_error: str | None = None
 
-            if translate and self.translator is not None and self.translated_pdf_writer is not None:
+            if translate and self.translator is not None:
                 try:
                     src_lang: str = source_lang or "English"
                     tgt_lang: str = target_lang or "Simplified Chinese"
@@ -413,27 +468,49 @@ class ConversionPipeline:
                     self._report_progress(total_pages, total_pages, "正在生成翻译PDF...")
                     lang_suffix: str = tgt_lang.split()[0][:2].lower() if tgt_lang else "tr"
                     output_translated_path = output_dir / f"{stem}_{lang_suffix}.pdf"
+                    output_bilingual_path = output_dir / f"{stem}_bilingual.pdf"
 
                     loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
-                    await loop.run_in_executor(
-                        None,
-                        self.translated_pdf_writer.create_translated_pdf,
-                        page_images,
-                        translated_pages,
-                        output_translated_path,
-                        tgt_lang,
-                    )
 
-                    output_bilingual_path = output_dir / f"{stem}_bilingual.pdf"
-                    await loop.run_in_executor(
-                        None,
-                        self.translated_pdf_writer.create_bilingual_pdf,
-                        page_images,
-                        parsed_pages,
-                        translated_pages,
-                        output_bilingual_path,
-                        tgt_lang,
-                    )
+                    if is_text_pdf:
+                        # 文本PDF: 使用 TextPDFTranslatedWriter
+                        text_translated_writer: TextPDFTranslatedWriter = TextPDFTranslatedWriter()
+                        await loop.run_in_executor(
+                            None,
+                            text_translated_writer.create_translated_pdf,
+                            input_pdf,
+                            translated_pages,
+                            output_translated_path,
+                            tgt_lang,
+                        )
+                        await loop.run_in_executor(
+                            None,
+                            text_translated_writer.create_bilingual_pdf,
+                            input_pdf,
+                            parsed_pages,
+                            translated_pages,
+                            output_bilingual_path,
+                            tgt_lang,
+                        )
+                    elif self.translated_pdf_writer is not None and page_images is not None:
+                        # 扫描PDF: 使用现有 TranslatedPDFWriter
+                        await loop.run_in_executor(
+                            None,
+                            self.translated_pdf_writer.create_translated_pdf,
+                            page_images,
+                            translated_pages,
+                            output_translated_path,
+                            tgt_lang,
+                        )
+                        await loop.run_in_executor(
+                            None,
+                            self.translated_pdf_writer.create_bilingual_pdf,
+                            page_images,
+                            parsed_pages,
+                            translated_pages,
+                            output_bilingual_path,
+                            tgt_lang,
+                        )
                 except Exception as e:
                     translation_error = str(e)
                     logger.error(f"翻译失败: {e}", exc_info=True)
@@ -451,6 +528,7 @@ class ConversionPipeline:
                 success=True,
                 translation_error=translation_error,
                 elapsed_seconds=elapsed,
+                pdf_type=pdf_type_info.pdf_type,
             )
 
         except Exception as e:
