@@ -46,9 +46,21 @@ class WebConfig:
 
 
 @dataclass
+class TranslationConfig:
+    """LLM翻译服务配置（OpenAI兼容接口）"""
+    base_url: str = field(default_factory=lambda: os.getenv("TRANSLATION_BASE_URL", "https://api.openai.com/v1"))
+    api_key: str = field(default_factory=lambda: os.getenv("TRANSLATION_API_KEY", ""))
+    model: str = field(default_factory=lambda: os.getenv("TRANSLATION_MODEL", "gpt-4o-mini"))
+    timeout: int = 120
+    max_retries: int = 3
+    temperature: float = 0.3
+
+
+@dataclass
 class AppConfig:
     """应用全局配置"""
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     pdf: PDFConfig = field(default_factory=PDFConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    translation: TranslationConfig = field(default_factory=TranslationConfig)
     output_dir: str = "./output"

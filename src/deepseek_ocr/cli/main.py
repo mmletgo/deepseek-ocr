@@ -5,12 +5,13 @@ Business Logic:
     环境健康检查、以及启动 Web 服务三项核心操作。
 
 Code Logic:
-    基于 Click 框架构建命令组 (cli)，下辖 convert / check / serve 三个子命令，
+    基于 Click 框架构建命令组 (cli)，下辖 convert / translate / check / serve 四个子命令，
     使用 Rich 美化控制台输出（进度条、表格、面板）。
 """
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import List
@@ -29,7 +30,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from deepseek_ocr.config import AppConfig, OllamaConfig, PDFConfig, PDFOutputMode, WebConfig
+from deepseek_ocr.config import AppConfig, OllamaConfig, PDFConfig, PDFOutputMode, TranslationConfig, WebConfig
 from deepseek_ocr.core.pipeline import ConversionPipeline, ConversionResult
 from deepseek_ocr.core.ocr_engine import OCREngine
 from deepseek_ocr.utils.logger import logger
@@ -79,18 +80,9 @@ def cli() -> None:
 
 
 # ---------------------------------------------------------------------------
-# convert 命令
+# 公共转换逻辑（供 convert 和 translate 子命令复用）
 # ---------------------------------------------------------------------------
-@cli.command()
-@click.argument("input_path", type=click.Path(exists=True))
-@click.option("--output", "-o", "output_dir", default="./output", help="输出目录，默认 ./output")
-@click.option("--dpi", default=200, type=int, help="PDF渲染DPI，默认200")
-@click.option("--no-pdf", "no_pdf", is_flag=True, default=False, help="不生成双层PDF")
-@click.option("--no-markdown", "no_markdown", is_flag=True, default=False, help="不生成Markdown")
-@click.option("--model", default="deepseek-ocr", help="Ollama模型名称，默认 deepseek-ocr")
-@click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
-@click.option("--pdf-mode", "pdf_mode", type=click.Choice(["dual_layer", "rewrite"], case_sensitive=False), default="dual_layer", help="PDF输出模式: dual_layer(双层) / rewrite(重绘)")
-def convert(
+def _run_convert(
     input_path: str,
     output_dir: str,
     dpi: int,
@@ -99,18 +91,26 @@ def convert(
     model: str,
     ollama_host: str,
     pdf_mode: str,
+    translate: bool,
+    source_lang: str,
+    target_lang: str,
+    translation_model: str | None,
+    translation_base_url: str | None,
+    translation_api_key: str | None,
 ) -> None:
     """
     Business Logic:
-        核心转换命令——接收用户指定的 PDF 文件或目录，逐个调用 ConversionPipeline
+        核心转换逻辑——接收用户指定的 PDF 文件或目录，逐个调用 ConversionPipeline
         完成 OCR 识别，并将结果（可搜索 PDF / Markdown）写入输出目录。
+        可选启用翻译功能，生成翻译PDF和双语对照PDF。
         支持单文件和目录批量处理，使用 Rich 进度条展示实时进度。
 
     Code Logic:
         1. 收集待处理 PDF 列表
         2. 构建 AppConfig，注入用户指定的 DPI / 模型 / Ollama 地址
-        3. 逐文件创建 ConversionPipeline，通过 progress_callback 驱动 Rich 进度条
-        4. 汇总所有结果，打印处理摘要（成功/失败数、总页数、总耗时）
+        3. 如果启用翻译，构建 TranslationConfig 并注入到 AppConfig
+        4. 逐文件创建 ConversionPipeline，通过 progress_callback 驱动 Rich 进度条
+        5. 汇总所有结果，打印处理摘要（成功/失败数、总页数、总耗时）
     """
     resolved_input: Path = Path(input_path).resolve()
     resolved_output: Path = Path(output_dir).resolve()
@@ -131,16 +131,41 @@ def convert(
         output_dir=str(resolved_output),
     )
 
+    # 构建翻译配置
+    if translate:
+        translation_config = TranslationConfig(
+            base_url=translation_base_url or os.getenv("TRANSLATION_BASE_URL", "https://api.openai.com/v1"),
+            api_key=translation_api_key or os.getenv("TRANSLATION_API_KEY", ""),
+            model=translation_model or os.getenv("TRANSLATION_MODEL", "gpt-4o-mini"),
+        )
+        if not translation_config.api_key:
+            console.print(
+                "[bold red]Error:[/bold red] --translate requires API key. "
+                "Set --translation-api-key or TRANSLATION_API_KEY env var."
+            )
+            raise SystemExit(1)
+        config.translation = translation_config
+
+    panel_lines: str = (
+        f"[bold]输入:[/bold] {resolved_input}\n"
+        f"[bold]输出:[/bold] {resolved_output}\n"
+        f"[bold]文件数:[/bold] {len(pdf_files)}    "
+        f"[bold]DPI:[/bold] {dpi}    "
+        f"[bold]模型:[/bold] {model}\n"
+        f"[bold]生成PDF:[/bold] {'是' if generate_pdf else '否'}    "
+        f"[bold]生成Markdown:[/bold] {'是' if generate_markdown else '否'}    "
+        f"[bold]PDF模式:[/bold] {pdf_mode}"
+    )
+    if translate:
+        panel_lines += (
+            f"\n[bold]翻译:[/bold] 是    "
+            f"[bold]源语言:[/bold] {source_lang}    "
+            f"[bold]目标语言:[/bold] {target_lang}"
+        )
+
     console.print(
         Panel(
-            f"[bold]输入:[/bold] {resolved_input}\n"
-            f"[bold]输出:[/bold] {resolved_output}\n"
-            f"[bold]文件数:[/bold] {len(pdf_files)}    "
-            f"[bold]DPI:[/bold] {dpi}    "
-            f"[bold]模型:[/bold] {model}\n"
-            f"[bold]生成PDF:[/bold] {'是' if generate_pdf else '否'}    "
-            f"[bold]生成Markdown:[/bold] {'是' if generate_markdown else '否'}    "
-            f"[bold]PDF模式:[/bold] {pdf_mode}",
+            panel_lines,
             title="[bold cyan]DeepSeek-OCR 转换任务[/bold cyan]",
             border_style="cyan",
         )
@@ -187,10 +212,19 @@ def convert(
                     output_dir=resolved_output,
                     generate_pdf=generate_pdf,
                     generate_markdown=generate_markdown,
+                    translate=translate,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
                 )
                 results.append(result)
                 if result.success:
                     console.print(f"  [green]完成[/green] ({result.page_count} 页, {result.elapsed_seconds:.1f}s)")
+                    if result.output_translated_pdf:
+                        console.print(f"  [cyan]翻译PDF:[/cyan] {result.output_translated_pdf}")
+                    if result.output_bilingual_pdf:
+                        console.print(f"  [cyan]双语PDF:[/cyan] {result.output_bilingual_pdf}")
+                    if result.translation_error:
+                        console.print(f"  [yellow]翻译警告:[/yellow] {result.translation_error}")
                 else:
                     console.print(f"  [red]失败: {result.error_msg}[/red]")
             except Exception as exc:
@@ -223,6 +257,104 @@ def convert(
 
     console.print()
     console.print(summary_table)
+
+
+# ---------------------------------------------------------------------------
+# convert 命令
+# ---------------------------------------------------------------------------
+@cli.command()
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option("--output", "-o", "output_dir", default="./output", help="输出目录，默认 ./output")
+@click.option("--dpi", default=200, type=int, help="PDF渲染DPI，默认200")
+@click.option("--no-pdf", "no_pdf", is_flag=True, default=False, help="不生成双层PDF")
+@click.option("--no-markdown", "no_markdown", is_flag=True, default=False, help="不生成Markdown")
+@click.option("--model", default="deepseek-ocr", help="Ollama模型名称，默认 deepseek-ocr")
+@click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
+@click.option("--pdf-mode", "pdf_mode", type=click.Choice(["dual_layer", "rewrite"], case_sensitive=False), default="dual_layer", help="PDF输出模式: dual_layer(双层) / rewrite(重绘)")
+@click.option("--translate", is_flag=True, default=False, help="启用LLM翻译")
+@click.option("--source-lang", default="English", help="源语言 (默认: English)")
+@click.option("--target-lang", default="Simplified Chinese", help="目标语言 (默认: Simplified Chinese)")
+@click.option("--translation-model", default=None, help="翻译LLM模型名 (覆盖环境变量)")
+@click.option("--translation-base-url", default=None, help="翻译API base_url (覆盖环境变量)")
+@click.option("--translation-api-key", default=None, help="翻译API key (覆盖环境变量)")
+def convert(
+    input_path: str,
+    output_dir: str,
+    dpi: int,
+    no_pdf: bool,
+    no_markdown: bool,
+    model: str,
+    ollama_host: str,
+    pdf_mode: str,
+    translate: bool,
+    source_lang: str,
+    target_lang: str,
+    translation_model: str | None,
+    translation_base_url: str | None,
+    translation_api_key: str | None,
+) -> None:
+    """将扫描PDF转换为可搜索PDF和Markdown，可选启用翻译。"""
+    _run_convert(
+        input_path=input_path,
+        output_dir=output_dir,
+        dpi=dpi,
+        no_pdf=no_pdf,
+        no_markdown=no_markdown,
+        model=model,
+        ollama_host=ollama_host,
+        pdf_mode=pdf_mode,
+        translate=translate,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        translation_model=translation_model,
+        translation_base_url=translation_base_url,
+        translation_api_key=translation_api_key,
+    )
+
+
+# ---------------------------------------------------------------------------
+# translate 命令
+# ---------------------------------------------------------------------------
+@cli.command()
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option("--output", "-o", "output_dir", default="./output", help="输出目录")
+@click.option("--source-lang", default="English", help="源语言 (默认: English)")
+@click.option("--target-lang", default="Simplified Chinese", help="目标语言 (默认: Simplified Chinese)")
+@click.option("--dpi", default=200, type=int, help="PDF渲染DPI")
+@click.option("--model", default="deepseek-ocr", help="OCR模型名")
+@click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
+@click.option("--translation-model", default=None, help="翻译LLM模型名 (覆盖环境变量)")
+@click.option("--translation-base-url", default=None, help="翻译API base_url (覆盖环境变量)")
+@click.option("--translation-api-key", default=None, help="翻译API key (覆盖环境变量)")
+def translate(
+    input_path: str,
+    output_dir: str,
+    source_lang: str,
+    target_lang: str,
+    dpi: int,
+    model: str,
+    ollama_host: str,
+    translation_model: str | None,
+    translation_base_url: str | None,
+    translation_api_key: str | None,
+) -> None:
+    """翻译扫描PDF：先OCR识别再翻译为目标语言。等效于 convert --translate。"""
+    _run_convert(
+        input_path=input_path,
+        output_dir=output_dir,
+        dpi=dpi,
+        no_pdf=False,
+        no_markdown=False,
+        model=model,
+        ollama_host=ollama_host,
+        pdf_mode="dual_layer",
+        translate=True,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        translation_model=translation_model,
+        translation_base_url=translation_base_url,
+        translation_api_key=translation_api_key,
+    )
 
 
 # ---------------------------------------------------------------------------

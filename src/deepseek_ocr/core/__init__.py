@@ -6,6 +6,7 @@ from deepseek_ocr.core.ocr_engine import OCREngine, OCRResult, PromptMode
 from deepseek_ocr.core.output_parser import OutputParser, TextBlock, ParsedPage
 from deepseek_ocr.core.pdf_writer import DualLayerPDFWriter
 from deepseek_ocr.core.markdown_writer import MarkdownWriter
+from deepseek_ocr.core.translated_pdf_writer import TranslatedPDFWriter
 from deepseek_ocr.core.pipeline import ConversionPipeline, ConversionResult
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "TextBlock",
     "ParsedPage",
     "DualLayerPDFWriter",
+    "TranslatedPDFWriter",
     "MarkdownWriter",
     "ConversionPipeline",
     "ConversionResult",
