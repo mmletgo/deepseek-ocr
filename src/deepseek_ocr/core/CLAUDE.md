@@ -36,6 +36,7 @@
 - 纯文本 → `tw.append()` 矢量文字 + `_wrap_line()` 自动换行
 - 两个 TextWriter：`tw_visible`(render_mode=0) + `tw_search`(render_mode=3)
 - matplotlib 使用 Agg 后端，子进程安全
+- CJK 字体支持：`_render_text_image()` 检测 CJK 字符时通过 `FontProperties(fname=...)` 加载系统 CJK 字体（`_find_cjk_font_path()` 通过 fontconfig 或回退路径查找），避免 matplotlib 默认字体不支持 CJK 导致乱码
 
 ## 翻译引擎技术要点
 - 批量翻译：将可翻译 blocks 按 [N] 编号组装到单个 prompt，一次 API 调用完成

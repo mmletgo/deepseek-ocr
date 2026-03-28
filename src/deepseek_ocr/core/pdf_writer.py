@@ -21,8 +21,10 @@ Code Logic:
 """
 
 import concurrent.futures
+import functools
 import multiprocessing
 import os
+import subprocess
 import pymupdf
 from pathlib import Path
 
@@ -31,6 +33,47 @@ from deepseek_ocr.core.output_parser import ParsedPage
 from deepseek_ocr.utils.logger import logger
 
 _KEEP_ORIGINAL_LABELS: frozenset[str] = frozenset({"image", "table"})
+
+
+@functools.lru_cache(maxsize=1)
+def _find_cjk_font_path() -> str | None:
+    """查找系统 CJK 字体文件路径，用于 matplotlib 渲染含 CJK 字符的文本。"""
+    # 优先通过 fontconfig 查找
+    try:
+        result: subprocess.CompletedProcess[str] = subprocess.run(
+            ["fc-match", "-f", "%{file}", "Noto Sans CJK SC"],
+            capture_output=True, text=True, timeout=5,
+        )
+        path: str = result.stdout.strip()
+        if path and os.path.exists(path):
+            return path
+    except Exception:
+        pass
+    # 回退到常见路径
+    for p in (
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _has_cjk_chars(text: str) -> bool:
+    """检测文本中是否包含 CJK 字符。"""
+    for c in text:
+        cp: int = ord(c)
+        if (
+            0x4E00 <= cp <= 0x9FFF
+            or 0x3400 <= cp <= 0x4DBF
+            or 0x3000 <= cp <= 0x303F
+            or 0xFF00 <= cp <= 0xFFEF
+            or 0x3040 <= cp <= 0x30FF
+            or 0xAC00 <= cp <= 0xD7AF
+        ):
+            return True
+    return False
 
 
 def _wrap_line(line: str, font: object, fontsize: float, max_width: float) -> list[str]:
@@ -210,9 +253,23 @@ def _render_text_image(text: str, label: str, width_pt: float, height_pt: float,
     fontsize: int = 14 if is_title else 10
     fontweight: str = 'bold' if is_title else 'normal'
 
+    # CJK 字体支持：检测文本是否包含 CJK 字符
+    text_kwargs: dict[str, object] = {
+        "va": "top", "ha": "left", "wrap": True, "math_fontfamily": "cm",
+    }
+    if _has_cjk_chars(text):
+        cjk_path: str | None = _find_cjk_font_path()
+        if cjk_path:
+            from matplotlib.font_manager import FontProperties
+            text_kwargs["fontproperties"] = FontProperties(
+                fname=cjk_path, size=fontsize, weight=fontweight,
+            )
+    if "fontproperties" not in text_kwargs:
+        text_kwargs["fontsize"] = fontsize
+        text_kwargs["fontweight"] = fontweight
+
     try:
-        fig.text(0.02, 0.98, converted, fontsize=fontsize, fontweight=fontweight,
-                 va='top', ha='left', wrap=True, math_fontfamily='cm')
+        fig.text(0.02, 0.98, converted, **text_kwargs)  # type: ignore[arg-type]
         buf: BytesIO = BytesIO()
         fig.savefig(buf, format='png', dpi=dpi, facecolor='white',
                     bbox_inches='tight', pad_inches=0.05)
