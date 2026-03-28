@@ -52,6 +52,8 @@ ollama pull deepseek-ocr   # Download the model (~6.7GB)
 ```bash
 git clone https://github.com/mmletgo/deepseek-ocr.git
 cd deepseek-ocr
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
 ```
 
@@ -90,15 +92,15 @@ deepseek-ocr serve
 
 **CLI Options for `convert`:**
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--output, -o` | `./output` | Output directory |
-| `--dpi` | `200` | PDF rendering DPI |
-| `--pdf-mode` | `dual_layer` | Output mode: `dual_layer` or `rewrite` |
-| `--no-pdf` | — | Skip PDF generation |
-| `--no-markdown` | — | Skip Markdown generation |
-| `--model` | `deepseek-ocr` | Ollama model name |
-| `--ollama-host` | `http://localhost:11434` | Ollama service URL |
+| Option | Env Variable | Default | Description |
+|--------|-------------|---------|-------------|
+| `--output, -o` | `OUTPUT_DIR` | `./output` | Output directory |
+| `--dpi` | `PDF_DPI` | `200` | PDF rendering DPI |
+| `--pdf-mode` | `PDF_OUTPUT_MODE` | `dual_layer` | Output mode: `dual_layer` or `rewrite` |
+| `--no-pdf` | — | — | Skip PDF generation |
+| `--no-markdown` | — | — | Skip Markdown generation |
+| `--model` | `OLLAMA_MODEL` | `deepseek-ocr` | Ollama model name |
+| `--ollama-host` | `OLLAMA_HOST` | `http://localhost:11434` | Ollama service URL |
 
 ### Web Interface
 
@@ -184,16 +186,40 @@ OutputParser --- Extracts text blocks with normalized coordinates (0-999)
 
 ## Configuration
 
-Configuration is managed through `src/deepseek_ocr/config.py` with sensible defaults:
+Copy `.env.template` to `.env` and uncomment the items you want to customize:
 
-| Config | Default | Env Variable | Description |
-|--------|---------|-------------|-------------|
-| Ollama host | `http://localhost:11434` | `OLLAMA_HOST` | Ollama service URL |
-| Model | `deepseek-ocr` | — | OCR model name |
-| PDF DPI | `200` | — | Render resolution for page images |
-| PDF mode | `dual_layer` | — | Default output mode |
-| Web port | `8080` | — | Web server port |
-| Max upload | `200 MB` | — | Maximum PDF upload size |
+```bash
+cp .env.template .env
+vi .env   # Edit as needed
+```
+
+All options can be set via `.env` file, environment variables, or CLI flags. **Priority: CLI flags > `.env` / env vars > defaults.**
+
+| Env Variable | Default | Description |
+|-------------|---------|-------------|
+| **Ollama** | | |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama service URL |
+| `OLLAMA_MODEL` | `deepseek-ocr` | OCR model name |
+| `OLLAMA_TIMEOUT` | `300` | OCR request timeout (seconds) |
+| `OLLAMA_KEEP_ALIVE` | `-1` | Model keep-alive duration |
+| **PDF** | | |
+| `PDF_DPI` | `200` | Render resolution for page images |
+| `PDF_MAX_DIMENSION` | `1920` | Max image dimension (pixels) |
+| `PDF_OUTPUT_MODE` | `dual_layer` | Default output mode (`dual_layer` / `rewrite`) |
+| **Web** | | |
+| `WEB_HOST` | `0.0.0.0` | Web server bind address |
+| `WEB_PORT` | `8080` | Web server port |
+| `WEB_UPLOAD_DIR` | `./uploads` | Upload directory |
+| `WEB_MAX_UPLOAD_SIZE_MB` | `200` | Max upload size (MB) |
+| **Translation** | | |
+| `TRANSLATION_BASE_URL` | `https://api.openai.com/v1` | LLM API base URL (OpenAI-compatible) |
+| `TRANSLATION_API_KEY` | — | LLM API key |
+| `TRANSLATION_MODEL` | `gpt-4o-mini` | Translation model name |
+| `TRANSLATION_TIMEOUT` | `120` | Translation request timeout (seconds) |
+| `TRANSLATION_MAX_RETRIES` | `3` | Max retry attempts |
+| `TRANSLATION_TEMPERATURE` | `0.3` | Sampling temperature |
+| **Output** | | |
+| `OUTPUT_DIR` | `./output` | Default output directory |
 
 ## Deployment (systemd)
 
@@ -209,7 +235,7 @@ After=network.target ollama.service
 Type=simple
 User=your-user
 WorkingDirectory=/path/to/deepseek-ocr
-ExecStart=/path/to/deepseek-ocr/.venv/bin/deepseek-ocr serve --host 0.0.0.0 --port 8080
+ExecStart=/path/to/deepseek-ocr/.venv/bin/deepseek-ocr serve
 Restart=always
 RestartSec=5
 
@@ -219,6 +245,19 @@ EOF
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now deepseek-ocr
+```
+
+### Service Management
+
+```bash
+# Restart service (e.g. after editing .env)
+sudo systemctl restart deepseek-ocr
+
+# View status
+sudo systemctl status deepseek-ocr
+
+# View logs (follow mode)
+sudo journalctl -u deepseek-ocr -f
 ```
 
 ## Project Structure
