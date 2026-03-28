@@ -14,6 +14,10 @@ import hashlib
 from pathlib import Path
 
 from deepseek_ocr.core.ocr_engine import OCRResult
+from deepseek_ocr.utils.logger import logger
+
+# 单页 OCR 文本超过此长度视为模型输出异常（重复/损坏），丢弃缓存重新 OCR
+_MAX_RAW_TEXT_LENGTH: int = 20_000
 
 
 class OCRCache:
@@ -85,9 +89,18 @@ class OCRCache:
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
+        raw_text: str = data.get("raw_text", "")
+        # 检测异常 OCR 输出：文本超长通常是模型输出重复/损坏
+        if len(raw_text) > _MAX_RAW_TEXT_LENGTH:
+            logger.warning(
+                f"页 {page_index}: OCR 缓存文本异常 ({len(raw_text)} 字符 > {_MAX_RAW_TEXT_LENGTH})，"
+                f"丢弃缓存将重新 OCR"
+            )
+            path.unlink(missing_ok=True)
+            return None
         return OCRResult(
             page_index=data["page_index"],
-            raw_text=data["raw_text"],
+            raw_text=raw_text,
             success=True,
         )
 
@@ -100,6 +113,12 @@ class OCRCache:
             创建父目录（若不存在），序列化 OCRResult 关键字段写入 JSON 文件。
             使用 ensure_ascii=False 支持多语言内容。
         """
+        # 不缓存异常 OCR 输出（文本超长，模型输出重复/损坏）
+        if len(result.raw_text) > _MAX_RAW_TEXT_LENGTH:
+            logger.warning(
+                f"页 {page_index}: OCR 输出异常 ({len(result.raw_text)} 字符)，不写入缓存"
+            )
+            return
         path = self._page_path(pdf_md5, page_index)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(

@@ -139,6 +139,7 @@ class ConversionPipeline:
             logger.info(f"PDF读取完成, 共 {total_pages} 页")
 
             # 步骤2: 逐页OCR
+            from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
             ocr_results: list[OCRResult] = []
             for i, page_img in enumerate(page_images):
                 self._report_progress(i + 1, total_pages, f"正在识别第 {i + 1} 页...")
@@ -146,6 +147,15 @@ class ConversionPipeline:
                     image_data=page_img.image_bytes,
                     page_index=page_img.page_index,
                 )
+                # OCR 输出异常（文本超长/重复）时重试
+                for _ocr_retry in range(2):
+                    if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
+                        break
+                    logger.warning(f"页 {i}: OCR输出异常 ({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试")
+                    result = self.ocr_engine.ocr_single_image(
+                        image_data=page_img.image_bytes,
+                        page_index=page_img.page_index,
+                    )
                 ocr_results.append(result)
                 if not result.success:
                     logger.warning(f"页 {i}: OCR失败: {result.error_msg}")
@@ -197,6 +207,28 @@ class ConversionPipeline:
                         self._report_progress(i + 1, total_pages, f"正在翻译第 {i + 1} 页...")
                         tp: TranslatedPage = self.translator.translate_page(parsed, src_lang, tgt_lang)
                         translated_pages.append(tp)
+
+                    # 重试翻译失败的页面（最多2轮）
+                    failed_indices: list[int] = [
+                        i for i, tp in enumerate(translated_pages) if not tp.success
+                    ]
+                    for retry_round in range(2):
+                        if not failed_indices:
+                            break
+                        logger.warning(
+                            f"第 {retry_round + 1} 轮重试: {len(failed_indices)} 页翻译失败"
+                        )
+                        still_failed: list[int] = []
+                        for idx in failed_indices:
+                            tp = self.translator.translate_page(
+                                parsed_pages[idx], src_lang, tgt_lang
+                            )
+                            translated_pages[idx] = tp
+                            if not tp.success:
+                                still_failed.append(idx)
+                        failed_indices = still_failed
+                    if failed_indices:
+                        logger.warning(f"重试后仍有 {len(failed_indices)} 页翻译失败")
 
                     # 步骤7: 生成翻译PDF
                     self._report_progress(total_pages, total_pages, "正在生成翻译PDF...")
@@ -286,6 +318,7 @@ class ConversionPipeline:
             logger.info(f"PDF读取完成, 共 {total_pages} 页")
 
             # 步骤2: 逐页异步OCR
+            from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
             ocr_results: list[OCRResult] = []
             for i, page_img in enumerate(page_images):
                 self._report_progress(i + 1, total_pages, f"正在识别第 {i + 1} 页...")
@@ -293,6 +326,15 @@ class ConversionPipeline:
                     image_data=page_img.image_bytes,
                     page_index=page_img.page_index,
                 )
+                # OCR 输出异常（文本超长/重复）时重试
+                for _ocr_retry in range(2):
+                    if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
+                        break
+                    logger.warning(f"页 {i}: OCR输出异常 ({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试")
+                    result = await self.ocr_engine.ocr_single_image_async(
+                        image_data=page_img.image_bytes,
+                        page_index=page_img.page_index,
+                    )
                 ocr_results.append(result)
                 if not result.success:
                     logger.warning(f"页 {i}: OCR失败: {result.error_msg}")
@@ -344,6 +386,28 @@ class ConversionPipeline:
                         self._report_progress(i + 1, total_pages, f"正在翻译第 {i + 1} 页...")
                         tp: TranslatedPage = await self.translator.translate_page_async(parsed, src_lang, tgt_lang)
                         translated_pages.append(tp)
+
+                    # 重试翻译失败的页面（最多2轮）
+                    failed_indices: list[int] = [
+                        i for i, tp in enumerate(translated_pages) if not tp.success
+                    ]
+                    for retry_round in range(2):
+                        if not failed_indices:
+                            break
+                        logger.warning(
+                            f"第 {retry_round + 1} 轮重试: {len(failed_indices)} 页翻译失败"
+                        )
+                        still_failed: list[int] = []
+                        for idx in failed_indices:
+                            tp = await self.translator.translate_page_async(
+                                parsed_pages[idx], src_lang, tgt_lang
+                            )
+                            translated_pages[idx] = tp
+                            if not tp.success:
+                                still_failed.append(idx)
+                        failed_indices = still_failed
+                    if failed_indices:
+                        logger.warning(f"重试后仍有 {len(failed_indices)} 页翻译失败")
 
                     # 步骤7: 生成翻译PDF（CPU密集，放到线程池）
                     self._report_progress(total_pages, total_pages, "正在生成翻译PDF...")

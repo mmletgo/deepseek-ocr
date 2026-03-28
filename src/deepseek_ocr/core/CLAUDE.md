@@ -45,6 +45,8 @@
 - 重试机制：指数退避（2s, 4s, 8s...），最多 max_retries 次
 - 同步/异步双接口：`translate_page` / `translate_page_async`
 - 错误隔离：单个 block 翻译失败保留原文，不影响其他 block
+- 翻译缓存失败重试：`save_page()` 持久化 `success` 字段；`load_page()` 检测到 `success=False` 返回 `None`（缓存未命中），自动触发重新翻译；旧格式缓存通过内容比对检测（可翻译块文本与原文完全一致则视为失败）
+- 页面级翻译重试：pipeline（同步/异步）在所有页面翻译后检查失败页面，最多额外重试2轮；web routes 在 `_translate_one_page` 中对失败页面即时重试最多2次
 
 ## 翻译PDF生成技术要点
 - 两种输出模式：目标语言PDF（白色遮盖+翻译文字重绘）、双语对照PDF（左原图右翻译）

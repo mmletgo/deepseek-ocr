@@ -15,6 +15,10 @@ from typing import Any
 
 from deepseek_ocr.core.output_parser import ParsedPage, TextBlock
 from deepseek_ocr.core.translator import TranslatedPage
+from deepseek_ocr.utils.logger import logger
+
+
+_SKIP_LABELS: frozenset[str] = frozenset({"formula", "equation", "image", "table"})
 
 
 class TranslationCache:
@@ -50,6 +54,30 @@ class TranslationCache:
         if not path.exists():
             return None
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        # 显式标记为失败的缓存 → 视为未命中，触发重新翻译
+        if not data.get("success", True):
+            logger.info(f"页 {page_index}: 缓存中翻译失败（success=False），将重新翻译")
+            return None
+        # 旧格式缓存（无 success 字段）：通过内容检测翻译是否实际完成
+        # 如果所有可翻译块的文本与原文完全相同，视为翻译失败
+        if "success" not in data:
+            orig_blocks: list[TextBlock] = original_page.blocks
+            cached_blocks: list[dict[str, Any]] = data.get("translated_blocks", [])
+            if len(orig_blocks) == len(cached_blocks):
+                has_translatable: bool = False
+                all_unchanged: bool = True
+                for orig, cached in zip(orig_blocks, cached_blocks):
+                    if orig.label in _SKIP_LABELS or not orig.text.strip():
+                        continue
+                    has_translatable = True
+                    if orig.text != cached.get("text", ""):
+                        all_unchanged = False
+                        break
+                if has_translatable and all_unchanged:
+                    logger.info(
+                        f"页 {page_index}: 旧缓存中翻译内容与原文一致，视为失败，将重新翻译"
+                    )
+                    return None
         translated_blocks: list[TextBlock] = [
             TextBlock(text=b["text"], label=b["label"], bbox=b["bbox"])
             for b in data["translated_blocks"]
@@ -69,6 +97,7 @@ class TranslationCache:
         path.parent.mkdir(parents=True, exist_ok=True)
         data: dict[str, Any] = {
             "page_index": page_index,
+            "success": translated_page.success,
             "translated_blocks": [
                 {"text": b.text, "label": b.label, "bbox": list(b.bbox)}
                 for b in translated_page.translated_blocks

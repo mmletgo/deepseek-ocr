@@ -282,7 +282,20 @@ async def _run_conversion(task_id: str) -> None:
                         image_data=page_img.image_bytes,
                         page_index=page_img.page_index,
                     )
-                    # 保存到缓存
+                    # OCR 输出异常（文本超长/重复）时重试，最多2次
+                    from deepseek_ocr.core.ocr_cache import _MAX_RAW_TEXT_LENGTH
+                    for _ocr_retry in range(2):
+                        if len(result.raw_text) <= _MAX_RAW_TEXT_LENGTH:
+                            break
+                        logger.warning(
+                            f"Task {task_id}: 页 {i} OCR输出异常 "
+                            f"({len(result.raw_text)} 字符)，第 {_ocr_retry + 1} 次重试"
+                        )
+                        result = await ocr_engine.ocr_single_image_async(
+                            image_data=page_img.image_bytes,
+                            page_index=page_img.page_index,
+                        )
+                    # 保存到缓存（异常输出会被 save_page 拒绝）
                     await loop.run_in_executor(
                         None, ocr_cache.save_page, pdf_md5, i, result
                     )
@@ -406,8 +419,19 @@ async def _run_conversion(task_id: str) -> None:
                                 tp: TranslatedPage = await translator.translate_page_async(
                                     parsed_pages[page_idx], src_lang, tgt_lang
                                 )
+                                # 翻译失败时重试（最多2次）
+                                for _retry in range(2):
+                                    if tp.success:
+                                        break
+                                    logger.warning(
+                                        f"Task {task_id}: 页 {page_idx} 翻译失败，"
+                                        f"第 {_retry + 1} 次重试..."
+                                    )
+                                    tp = await translator.translate_page_async(
+                                        parsed_pages[page_idx], src_lang, tgt_lang
+                                    )
                                 translated_pages[page_idx] = tp
-                                # 保存到缓存
+                                # 保存到缓存（含 success 标记）
                                 await loop.run_in_executor(
                                     None,
                                     translation_cache.save_page,
