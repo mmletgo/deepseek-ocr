@@ -16,10 +16,10 @@
 - `_collect_pdf_files(input_path)`: 收集单文件或目录中的PDF列表
 - `_run_convert(...)`: 公共转换逻辑，供 convert 和 translate 子命令复用；包含构建 AppConfig/TranslationConfig、逐文件调用 ConversionPipeline、显示进度和结果摘要
 
-## 翻译配置优先级
-1. CLI参数 (--translation-api-key 等)
-2. 环境变量 (TRANSLATION_API_KEY, TRANSLATION_BASE_URL, TRANSLATION_MODEL)
-3. 默认值 (base_url=openai, model=gpt-4o-mini)
+## 配置优先级
+1. CLI参数（所有可覆盖参数默认值为 None，非 None 时生效）
+2. .env 文件 / 环境变量（通过 AppConfig 的 dataclass default_factory 读取）
+3. 代码默认值
 
 ## 入口点
 `pyproject.toml` 中定义: `deepseek-ocr = "deepseek_ocr.cli.main:cli"`

@@ -7,11 +7,11 @@ Business Logic:
 Code Logic:
     基于 Click 框架构建命令组 (cli)，下辖 convert / translate / check / serve 四个子命令，
     使用 Rich 美化控制台输出（进度条、表格、面板）。
+    CLI 参数默认值为 None，非 None 时覆盖 .env / 环境变量配置。
 """
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import List
@@ -30,7 +30,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from deepseek_ocr.config import AppConfig, OllamaConfig, PDFConfig, PDFOutputMode, TranslationConfig, WebConfig
+from deepseek_ocr.config import AppConfig, PDFOutputMode
 from deepseek_ocr.core.pipeline import ConversionPipeline, ConversionResult
 from deepseek_ocr.core.ocr_engine import OCREngine
 from deepseek_ocr.utils.logger import logger
@@ -84,16 +84,16 @@ def cli() -> None:
 # ---------------------------------------------------------------------------
 def _run_convert(
     input_path: str,
-    output_dir: str,
-    dpi: int,
+    output_dir: str | None,
+    dpi: int | None,
     no_pdf: bool,
     no_markdown: bool,
-    model: str,
-    ollama_host: str,
-    pdf_mode: str,
+    model: str | None,
+    ollama_host: str | None,
+    pdf_mode: str | None,
     translate: bool,
-    source_lang: str,
-    target_lang: str,
+    source_lang: str | None,
+    target_lang: str | None,
     translation_model: str | None,
     translation_base_url: str | None,
     translation_api_key: str | None,
@@ -106,14 +106,28 @@ def _run_convert(
         支持单文件和目录批量处理，使用 Rich 进度条展示实时进度。
 
     Code Logic:
-        1. 收集待处理 PDF 列表
-        2. 构建 AppConfig，注入用户指定的 DPI / 模型 / Ollama 地址
-        3. 如果启用翻译，构建 TranslationConfig 并注入到 AppConfig
-        4. 逐文件创建 ConversionPipeline，通过 progress_callback 驱动 Rich 进度条
-        5. 汇总所有结果，打印处理摘要（成功/失败数、总页数、总耗时）
+        1. 从 .env 和默认值构建基础 AppConfig
+        2. 用非 None 的 CLI 参数覆盖配置
+        3. 逐文件创建 ConversionPipeline，通过 progress_callback 驱动 Rich 进度条
+        4. 汇总所有结果，打印处理摘要（成功/失败数、总页数、总耗时）
     """
+    # 从 .env 和默认值构建基础配置
+    config = AppConfig()
+
+    # CLI 参数覆盖（非 None 时生效）
+    if ollama_host is not None:
+        config.ollama.host = ollama_host
+    if model is not None:
+        config.ollama.model = model
+    if dpi is not None:
+        config.pdf.dpi = dpi
+    if pdf_mode is not None:
+        config.pdf.output_mode = PDFOutputMode(pdf_mode)
+    if output_dir is not None:
+        config.output_dir = str(Path(output_dir).resolve())
+
     resolved_input: Path = Path(input_path).resolve()
-    resolved_output: Path = Path(output_dir).resolve()
+    resolved_output: Path = Path(config.output_dir).resolve()
     resolved_output.mkdir(parents=True, exist_ok=True)
 
     pdf_files: List[Path] = _collect_pdf_files(resolved_input)
@@ -125,42 +139,39 @@ def _run_convert(
         console.print("[bold red]错误: --no-pdf 和 --no-markdown 不能同时使用，至少需要一种输出格式[/bold red]")
         raise SystemExit(1)
 
-    config = AppConfig(
-        ollama=OllamaConfig(host=ollama_host, model=model),
-        pdf=PDFConfig(dpi=dpi, output_mode=PDFOutputMode(pdf_mode)),
-        output_dir=str(resolved_output),
-    )
-
     # 构建翻译配置
     if translate:
-        translation_config = TranslationConfig(
-            base_url=translation_base_url or os.getenv("TRANSLATION_BASE_URL", "https://api.openai.com/v1"),
-            api_key=translation_api_key or os.getenv("TRANSLATION_API_KEY", ""),
-            model=translation_model or os.getenv("TRANSLATION_MODEL", "gpt-4o-mini"),
-        )
-        if not translation_config.api_key:
+        if translation_base_url is not None:
+            config.translation.base_url = translation_base_url
+        if translation_api_key is not None:
+            config.translation.api_key = translation_api_key
+        if translation_model is not None:
+            config.translation.model = translation_model
+        if not config.translation.api_key:
             console.print(
                 "[bold red]Error:[/bold red] --translate requires API key. "
                 "Set --translation-api-key or TRANSLATION_API_KEY env var."
             )
             raise SystemExit(1)
-        config.translation = translation_config
+
+    effective_source_lang: str = source_lang or "English"
+    effective_target_lang: str = target_lang or "Simplified Chinese"
 
     panel_lines: str = (
         f"[bold]输入:[/bold] {resolved_input}\n"
         f"[bold]输出:[/bold] {resolved_output}\n"
         f"[bold]文件数:[/bold] {len(pdf_files)}    "
-        f"[bold]DPI:[/bold] {dpi}    "
-        f"[bold]模型:[/bold] {model}\n"
+        f"[bold]DPI:[/bold] {config.pdf.dpi}    "
+        f"[bold]模型:[/bold] {config.ollama.model}\n"
         f"[bold]生成PDF:[/bold] {'是' if generate_pdf else '否'}    "
         f"[bold]生成Markdown:[/bold] {'是' if generate_markdown else '否'}    "
-        f"[bold]PDF模式:[/bold] {pdf_mode}"
+        f"[bold]PDF模式:[/bold] {config.pdf.output_mode.value}"
     )
     if translate:
         panel_lines += (
             f"\n[bold]翻译:[/bold] 是    "
-            f"[bold]源语言:[/bold] {source_lang}    "
-            f"[bold]目标语言:[/bold] {target_lang}"
+            f"[bold]源语言:[/bold] {effective_source_lang}    "
+            f"[bold]目标语言:[/bold] {effective_target_lang}"
         )
 
     console.print(
@@ -213,8 +224,8 @@ def _run_convert(
                     generate_pdf=generate_pdf,
                     generate_markdown=generate_markdown,
                     translate=translate,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
+                    source_lang=effective_source_lang,
+                    target_lang=effective_target_lang,
                 )
                 results.append(result)
                 if result.success:
@@ -264,31 +275,31 @@ def _run_convert(
 # ---------------------------------------------------------------------------
 @cli.command()
 @click.argument("input_path", type=click.Path(exists=True))
-@click.option("--output", "-o", "output_dir", default="./output", help="输出目录，默认 ./output")
-@click.option("--dpi", default=200, type=int, help="PDF渲染DPI，默认200")
+@click.option("--output", "-o", "output_dir", default=None, help="输出目录 (env: OUTPUT_DIR, 默认 ./output)")
+@click.option("--dpi", default=None, type=int, help="PDF渲染DPI (env: PDF_DPI, 默认200)")
 @click.option("--no-pdf", "no_pdf", is_flag=True, default=False, help="不生成双层PDF")
 @click.option("--no-markdown", "no_markdown", is_flag=True, default=False, help="不生成Markdown")
-@click.option("--model", default="deepseek-ocr", help="Ollama模型名称，默认 deepseek-ocr")
-@click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
-@click.option("--pdf-mode", "pdf_mode", type=click.Choice(["dual_layer", "rewrite"], case_sensitive=False), default="dual_layer", help="PDF输出模式: dual_layer(双层) / rewrite(重绘)")
+@click.option("--model", default=None, help="Ollama模型名称 (env: OLLAMA_MODEL, 默认 deepseek-ocr)")
+@click.option("--ollama-host", default=None, help="Ollama服务地址 (env: OLLAMA_HOST, 默认 http://localhost:11434)")
+@click.option("--pdf-mode", "pdf_mode", type=click.Choice(["dual_layer", "rewrite"], case_sensitive=False), default=None, help="PDF输出模式: dual_layer(双层) / rewrite(重绘) (env: PDF_OUTPUT_MODE)")
 @click.option("--translate", is_flag=True, default=False, help="启用LLM翻译")
-@click.option("--source-lang", default="English", help="源语言 (默认: English)")
-@click.option("--target-lang", default="Simplified Chinese", help="目标语言 (默认: Simplified Chinese)")
-@click.option("--translation-model", default=None, help="翻译LLM模型名 (覆盖环境变量)")
-@click.option("--translation-base-url", default=None, help="翻译API base_url (覆盖环境变量)")
-@click.option("--translation-api-key", default=None, help="翻译API key (覆盖环境变量)")
+@click.option("--source-lang", default=None, help="源语言 (默认: English)")
+@click.option("--target-lang", default=None, help="目标语言 (默认: Simplified Chinese)")
+@click.option("--translation-model", default=None, help="翻译LLM模型名 (env: TRANSLATION_MODEL)")
+@click.option("--translation-base-url", default=None, help="翻译API base_url (env: TRANSLATION_BASE_URL)")
+@click.option("--translation-api-key", default=None, help="翻译API key (env: TRANSLATION_API_KEY)")
 def convert(
     input_path: str,
-    output_dir: str,
-    dpi: int,
+    output_dir: str | None,
+    dpi: int | None,
     no_pdf: bool,
     no_markdown: bool,
-    model: str,
-    ollama_host: str,
-    pdf_mode: str,
+    model: str | None,
+    ollama_host: str | None,
+    pdf_mode: str | None,
     translate: bool,
-    source_lang: str,
-    target_lang: str,
+    source_lang: str | None,
+    target_lang: str | None,
     translation_model: str | None,
     translation_base_url: str | None,
     translation_api_key: str | None,
@@ -317,23 +328,23 @@ def convert(
 # ---------------------------------------------------------------------------
 @cli.command()
 @click.argument("input_path", type=click.Path(exists=True))
-@click.option("--output", "-o", "output_dir", default="./output", help="输出目录")
-@click.option("--source-lang", default="English", help="源语言 (默认: English)")
-@click.option("--target-lang", default="Simplified Chinese", help="目标语言 (默认: Simplified Chinese)")
-@click.option("--dpi", default=200, type=int, help="PDF渲染DPI")
-@click.option("--model", default="deepseek-ocr", help="OCR模型名")
-@click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
-@click.option("--translation-model", default=None, help="翻译LLM模型名 (覆盖环境变量)")
-@click.option("--translation-base-url", default=None, help="翻译API base_url (覆盖环境变量)")
-@click.option("--translation-api-key", default=None, help="翻译API key (覆盖环境变量)")
+@click.option("--output", "-o", "output_dir", default=None, help="输出目录 (env: OUTPUT_DIR, 默认 ./output)")
+@click.option("--source-lang", default=None, help="源语言 (默认: English)")
+@click.option("--target-lang", default=None, help="目标语言 (默认: Simplified Chinese)")
+@click.option("--dpi", default=None, type=int, help="PDF渲染DPI (env: PDF_DPI, 默认200)")
+@click.option("--model", default=None, help="OCR模型名 (env: OLLAMA_MODEL, 默认 deepseek-ocr)")
+@click.option("--ollama-host", default=None, help="Ollama服务地址 (env: OLLAMA_HOST, 默认 http://localhost:11434)")
+@click.option("--translation-model", default=None, help="翻译LLM模型名 (env: TRANSLATION_MODEL)")
+@click.option("--translation-base-url", default=None, help="翻译API base_url (env: TRANSLATION_BASE_URL)")
+@click.option("--translation-api-key", default=None, help="翻译API key (env: TRANSLATION_API_KEY)")
 def translate(
     input_path: str,
-    output_dir: str,
-    source_lang: str,
-    target_lang: str,
-    dpi: int,
-    model: str,
-    ollama_host: str,
+    output_dir: str | None,
+    source_lang: str | None,
+    target_lang: str | None,
+    dpi: int | None,
+    model: str | None,
+    ollama_host: str | None,
     translation_model: str | None,
     translation_base_url: str | None,
     translation_api_key: str | None,
@@ -347,7 +358,7 @@ def translate(
         no_markdown=False,
         model=model,
         ollama_host=ollama_host,
-        pdf_mode="dual_layer",
+        pdf_mode=None,
         translate=True,
         source_lang=source_lang,
         target_lang=target_lang,
@@ -361,22 +372,31 @@ def translate(
 # check 命令
 # ---------------------------------------------------------------------------
 @cli.command()
-@click.option("--ollama-host", default="http://localhost:11434", help="Ollama服务地址")
-@click.option("--model", default="deepseek-ocr", help="Ollama模型名称")
-def check(ollama_host: str, model: str) -> None:
+@click.option("--ollama-host", default=None, help="Ollama服务地址 (env: OLLAMA_HOST, 默认 http://localhost:11434)")
+@click.option("--model", default=None, help="Ollama模型名称 (env: OLLAMA_MODEL, 默认 deepseek-ocr)")
+def check(ollama_host: str | None, model: str | None) -> None:
     """
     Business Logic:
         在正式转换前，让用户快速确认运行环境是否就绪——Ollama 服务是否
         可达、所需模型是否已拉取。
 
     Code Logic:
-        1. 构建 OllamaConfig 并实例化 OCREngine
-        2. 调用 check_health() 判断服务状态
-        3. 通过 ollama 库列出已有模型，检查目标模型是否存在
-        4. 用 Rich Table 展示检查结果
+        1. 构建 AppConfig 获取 .env 默认值，然后用非 None 的 CLI 参数覆盖
+        2. 实例化 OCREngine
+        3. 调用 check_health() 判断服务状态
+        4. 通过 ollama 库列出已有模型，检查目标模型是否存在
+        5. 用 Rich Table 展示检查结果
     """
-    config = OllamaConfig(host=ollama_host, model=model)
-    engine = OCREngine(config)
+    config = AppConfig()
+    if ollama_host is not None:
+        config.ollama.host = ollama_host
+    if model is not None:
+        config.ollama.model = model
+
+    effective_host: str = config.ollama.host
+    effective_model: str = config.ollama.model
+
+    engine = OCREngine(config.ollama)
 
     check_table = Table(title="环境检查", border_style="cyan")
     check_table.add_column("检查项", style="bold")
@@ -391,32 +411,32 @@ def check(ollama_host: str, model: str) -> None:
         logger.debug(f"Ollama 健康检查异常: {exc}")
 
     if ollama_ok:
-        check_table.add_row("Ollama 服务", "[green]正常[/green]", f"地址: {ollama_host}")
+        check_table.add_row("Ollama 服务", "[green]正常[/green]", f"地址: {effective_host}")
     else:
-        check_table.add_row("Ollama 服务", "[red]不可用[/red]", f"无法连接 {ollama_host}")
+        check_table.add_row("Ollama 服务", "[red]不可用[/red]", f"无法连接 {effective_host}")
 
     # 检查模型是否已拉取
     model_ok: bool = False
     if ollama_ok:
         try:
             import ollama as ollama_lib
-            client = ollama_lib.Client(host=ollama_host)
+            client = ollama_lib.Client(host=effective_host)
             model_list = client.list()
             available_models: List[str] = [m.model for m in model_list.models]
             # 模型名可能带 :latest 后缀，做宽松匹配
             model_ok = any(
-                m == model or m.startswith(f"{model}:") for m in available_models
+                m == effective_model or m.startswith(f"{effective_model}:") for m in available_models
             )
         except Exception as exc:
             logger.debug(f"模型列表获取异常: {exc}")
 
     if model_ok:
-        check_table.add_row("OCR 模型", "[green]已就绪[/green]", f"模型: {model}")
+        check_table.add_row("OCR 模型", "[green]已就绪[/green]", f"模型: {effective_model}")
     elif ollama_ok:
         check_table.add_row(
             "OCR 模型",
             "[yellow]未找到[/yellow]",
-            f"请运行: ollama pull {model}",
+            f"请运行: ollama pull {effective_model}",
         )
     else:
         check_table.add_row("OCR 模型", "[dim]跳过[/dim]", "Ollama 服务不可用，无法检查模型")
@@ -434,9 +454,9 @@ def check(ollama_host: str, model: str) -> None:
 # serve 命令
 # ---------------------------------------------------------------------------
 @cli.command()
-@click.option("--host", default="0.0.0.0", help="绑定地址，默认 0.0.0.0")
-@click.option("--port", default=8080, type=int, help="端口，默认 8080")
-def serve(host: str, port: int) -> None:
+@click.option("--host", default=None, help="绑定地址 (env: WEB_HOST, 默认 0.0.0.0)")
+@click.option("--port", default=None, type=int, help="端口 (env: WEB_PORT, 默认 8080)")
+def serve(host: str | None, port: int | None) -> None:
     """
     Business Logic:
         启动基于 FastAPI 的 Web 服务，让用户通过浏览器上传 PDF 并获取
@@ -444,21 +464,26 @@ def serve(host: str, port: int) -> None:
 
     Code Logic:
         导入 Web 模块中的 FastAPI app，使用 uvicorn.run() 启动服务。
+        从 AppConfig 获取 .env 默认值，CLI 参数非 None 时覆盖。
     """
     import uvicorn
     from deepseek_ocr.web.app import create_app
 
+    config = AppConfig()
+    effective_host: str = host if host is not None else config.web.host
+    effective_port: int = port if port is not None else config.web.port
+
     console.print(
         Panel(
-            f"[bold]地址:[/bold] http://{host}:{port}\n"
-            f"[bold]文档:[/bold] http://{host}:{port}/docs",
+            f"[bold]地址:[/bold] http://{effective_host}:{effective_port}\n"
+            f"[bold]文档:[/bold] http://{effective_host}:{effective_port}/docs",
             title="[bold cyan]DeepSeek-OCR Web 服务[/bold cyan]",
             border_style="cyan",
         )
     )
 
     app = create_app()
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=effective_host, port=effective_port, log_level="info")
 
 
 if __name__ == "__main__":
