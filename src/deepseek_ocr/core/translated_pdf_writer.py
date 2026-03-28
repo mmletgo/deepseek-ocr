@@ -30,6 +30,7 @@ from deepseek_ocr.core.pdf_writer import (
     _contains_latex,
     _clean_markdown,
     _render_text_image,
+    _strip_latex,
 )
 from deepseek_ocr.utils.logger import logger
 
@@ -224,8 +225,10 @@ def _render_translated_page_worker(args: tuple) -> bytes:  # type: ignore[type-a
             page.draw_rect(block_rect, color=None, fill=(1, 1, 1), overlay=True)
 
             # 3路径渲染翻译文字
-            if _contains_latex(text):
-                # 含内联 LaTeX → matplotlib 渲染
+            # CJK 语言跳过 matplotlib 路径：matplotlib 不支持 CJK 文字换行，
+            # 长文本会被压缩成极小字体。剥离 LaTeX 定界符后走纯文本 CJK 渲染。
+            if _contains_latex(text) and not use_cjk:
+                # 含内联 LaTeX → matplotlib 渲染（仅非 CJK 语言）
                 try:
                     png_bytes: bytes = _render_text_image(text, label, bbox_width, bbox_height)
                     page.insert_image(block_rect, stream=png_bytes, overlay=True)
@@ -242,7 +245,8 @@ def _render_translated_page_worker(args: tuple) -> bytes:  # type: ignore[type-a
                     pass  # 回退到纯文本渲染
 
             # 纯文本渲染（或 LaTeX 渲染失败的回退）
-            clean_text: str = _clean_markdown(text.strip())
+            stripped_text: str = _strip_latex(text.strip()) if use_cjk else text.strip()
+            clean_text: str = _clean_markdown(stripped_text)
             render_font: object = cjk_font if use_cjk else helv_font
             lines: list[str] = clean_text.split("\n")
             fontsize_txt: float = max(
@@ -357,6 +361,13 @@ def _render_bilingual_page_worker(args: tuple) -> bytes:  # type: ignore[type-ar
             width=0.5,
         )
 
+        # 创建 Pixmap 用于复制原始扫描中的公式/图表/图片到右半页
+        full_pix: _fitz.Pixmap | None = None
+        try:
+            full_pix = _fitz.Pixmap(page_img.image_bytes)
+        except Exception:
+            pass
+
         # 右半页渲染翻译文字
         tw_right: _fitz.TextWriter = _fitz.TextWriter(page.rect)
 
@@ -365,10 +376,33 @@ def _render_bilingual_page_worker(args: tuple) -> bytes:  # type: ignore[type-ar
             label: str = str(block.get("label", ""))
             bbox: list[int] = list(block.get("bbox", [0, 0, 999, 999]))  # type: ignore[arg-type]
 
-            if not text.strip():
-                continue
+            # 公式/图表/图片：复制原始扫描对应区域到右半页
             if label in _SKIP_LABELS:
-                # 图片/表格/公式区域在右半页留白（左侧已有原图）
+                if full_pix is not None:
+                    r_x1: float = bbox[0] / 999.0 * orig_w + orig_w
+                    r_y1: float = bbox[1] / 999.0 * orig_h
+                    r_x2: float = bbox[2] / 999.0 * orig_w + orig_w
+                    r_y2: float = bbox[3] / 999.0 * orig_h
+                    if r_x2 > r_x1 and r_y2 > r_y1:
+                        try:
+                            pix_x1: int = max(0, int(bbox[0] / 999 * full_pix.width))
+                            pix_y1: int = max(0, int(bbox[1] / 999 * full_pix.height))
+                            pix_x2: int = min(full_pix.width, int(bbox[2] / 999 * full_pix.width))
+                            pix_y2: int = min(full_pix.height, int(bbox[3] / 999 * full_pix.height))
+                            if pix_x2 > pix_x1 and pix_y2 > pix_y1:
+                                clip: _fitz.IRect = _fitz.IRect(pix_x1, pix_y1, pix_x2, pix_y2)
+                                cropped: _fitz.Pixmap = _fitz.Pixmap(
+                                    full_pix.colorspace, clip, full_pix.alpha,
+                                )
+                                cropped.copy(full_pix, clip)
+                                cropped.set_origin(0, 0)
+                                dest: _fitz.Rect = _fitz.Rect(r_x1, r_y1, r_x2, r_y2)
+                                page.insert_image(dest, pixmap=cropped, overlay=True)
+                        except Exception:
+                            pass
+                continue
+
+            if not text.strip():
                 continue
 
             # 坐标转换到右半页：x轴偏移original_width
@@ -384,7 +418,8 @@ def _render_bilingual_page_worker(args: tuple) -> bytes:  # type: ignore[type-ar
             bbox_height: float = pdf_y2 - pdf_y1
 
             # 3路径渲染翻译文字
-            if _contains_latex(text):
+            # CJK 语言跳过 matplotlib 路径（不支持 CJK 换行）
+            if _contains_latex(text) and not use_cjk:
                 try:
                     png_bytes: bytes = _render_text_image(text, label, bbox_width, bbox_height)
                     img_rect: _fitz.Rect = _fitz.Rect(pdf_x1, pdf_y1, pdf_x2, pdf_y2)
@@ -394,7 +429,8 @@ def _render_bilingual_page_worker(args: tuple) -> bytes:  # type: ignore[type-ar
                     pass  # 回退到纯文本
 
             # 纯文本渲染（或 LaTeX 渲染失败的回退）
-            clean_text: str = _clean_markdown(text.strip())
+            stripped_text: str = _strip_latex(text.strip()) if use_cjk else text.strip()
+            clean_text: str = _clean_markdown(stripped_text)
             render_font: object = cjk_font if use_cjk else helv_font
             lines: list[str] = clean_text.split("\n")
             fontsize_txt: float = max(

@@ -53,10 +53,12 @@
 - 跳过标签：`_SKIP_LABELS = {"formula", "equation", "image", "table"}` 保持原始扫描
 - 搜索层：翻译PDF写入原文到不可见搜索层（helv, fontsize=3, render_mode=3）
 - 双语对照：页面宽度翻倍，左半页原图，右半页白色背景+翻译文字，中间灰色分隔线
+- 双语对照公式/图表保留：skip-label 块从原始扫描 Pixmap 裁切对应区域，复制到右半页对应位置（`Pixmap.copy()` + `set_origin(0,0)` + `insert_image()`）
 - 多进程并行：ProcessPoolExecutor(forkserver)，worker函数为模块级函数
 - 数据序列化：TextBlock → dict 跨进程传递（避免pickle问题）
-- 三路径渲染（复用 pdf_writer.py 的 `_contains_latex`, `_clean_markdown`, `_render_text_image`）：
-  - 含内联 LaTeX(`\(...\)`) 的翻译文本 → `_render_text_image()` matplotlib 渲染为 PNG 嵌入，失败静默回退纯文本
+- 三路径渲染（复用 pdf_writer.py 的 `_contains_latex`, `_clean_markdown`, `_render_text_image`, `_strip_latex`）：
+  - 非 CJK 语言 + 含内联 LaTeX → `_render_text_image()` matplotlib 渲染为 PNG 嵌入，失败静默回退纯文本
+  - CJK 语言 + 含内联 LaTeX → 跳过 matplotlib（不支持 CJK 换行），`_strip_latex()` 剥离定界符后走纯文本渲染
   - 纯文本 → `_clean_markdown()` 清理 Markdown 标记（如 `####` 标题）后矢量文字渲染
   - 目标语言PDF：LaTeX 成功时写入不可见搜索层；双语对照PDF：LaTeX 渲染 PNG 嵌入右半页
 
