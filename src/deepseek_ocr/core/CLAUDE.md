@@ -12,7 +12,10 @@
 | `translator.py` | 通过 OpenAI 兼容接口调用 LLM 翻译文本块 (Translator, TranslatedPage) |
 | `translated_pdf_writer.py` | 生成翻译版PDF: 目标语言PDF + 双语对照PDF (TranslatedPDFWriter) |
 | `translation_cache.py` | 翻译结果持久化缓存，按 PDF MD5 + 语言对存储 (TranslationCache) |
-| `pipeline.py` | 端到端编排所有模块 (ConversionPipeline, ConversionResult) |
+| `pdf_type_detector.py` | 检测PDF类型：文本版/扫描版 (PDFTypeDetector, PDFTypeInfo) |
+| `text_pdf_extractor.py` | 从文本PDF直接提取文本和坐标 (TextPDFExtractor) |
+| `text_pdf_translated_writer.py` | 为文本PDF生成翻译版/双语PDF，保留矢量内容 (TextPDFTranslatedWriter) |
+| `pipeline.py` | 端到端编排所有模块，自动检测PDF类型分流 (ConversionPipeline, ConversionResult) |
 
 ## 关键数据结构
 - `PageImage`: PDF单页的PNG图片数据 + 尺寸元信息
@@ -20,7 +23,8 @@
 - `TextBlock`: 单个文本区域 (text + label + bbox归一化坐标)
 - `ParsedPage`: 单页解析结果 (blocks列表 + 清理后的文本)
 - `TranslatedPage`: 单页翻译结果 (original ParsedPage + translated_blocks + success状态)
-- `ConversionResult`: 最终转换结果 (输出路径 + 状态)
+- `ConversionResult`: 最终转换结果 (输出路径 + 状态 + pdf_type)
+- `PDFTypeInfo`: PDF类型检测结果 (pdf_type + 统计信息)
 
 ## PDF生成技术要点
 - `page.insert_image(rect, stream=bytes, overlay=False)` 插入底层图像
@@ -63,6 +67,18 @@
   - CJK 语言 + 含内联 LaTeX → 跳过 matplotlib（不支持 CJK 换行），`_strip_latex()` 剥离定界符后走纯文本渲染
   - 纯文本 → `_clean_markdown()` 清理 Markdown 标记（如 `####` 标题）后矢量文字渲染
   - 目标语言PDF：LaTeX 成功时写入不可见搜索层；双语对照PDF：LaTeX 渲染 PNG 嵌入右半页
+
+## 文本PDF处理路径
+- **类型检测**: `PDFTypeDetector` 采样前5页，统计非空白字符数，平均>100字符/页判定为文本PDF
+- **文本提取**: `TextPDFExtractor` 使用 `page.get_text("dict")` 提取 blocks/lines/spans
+  - type=0 文本块：聚合文本，根据字号中位数*1.5判断 title/text
+  - type=1 图片块：label="image"
+  - bbox 从 PDF pt 坐标转归一化 0-999
+- **翻译PDF生成**: `TextPDFTranslatedWriter` 使用 `show_pdf_page()` 保留原始矢量内容
+  - 翻译版：show_pdf_page + 白色遮盖 + 翻译文字覆盖
+  - 双语版：页面双倍宽，左=show_pdf_page，右=白底+翻译文字
+  - 复用 `translated_pdf_writer.py` 的辅助函数（字体、换行、渲染）
+- **pipeline 分流**: 检测PDF类型 → 文本PDF跳过OCR → 两条路径在 ParsedPage 汇合 → 翻译/Markdown 复用
 
 ## 降级策略
 OCR输出无坐标标签时 → 整页文本作为单个TextBlock(bbox=[0,0,999,999])

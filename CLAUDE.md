@@ -1,6 +1,6 @@
 # DeepSeek-OCR 项目
 
-使用本地 DeepSeek-OCR 模型将英文扫描 PDF 转化为可搜索双层 PDF 和 Markdown 文件的工具。支持通过 OpenAI 兼容 LLM 接口将 OCR 结果翻译为目标语言，生成翻译版 PDF 和双语对照 PDF。
+使用本地 DeepSeek-OCR 模型将英文扫描 PDF 转化为可搜索双层 PDF 和 Markdown 文件的工具。支持通过 OpenAI 兼容 LLM 接口将 OCR 结果翻译为目标语言，生成翻译版 PDF 和双语对照 PDF。同时支持文本类型PDF（非扫描版），自动检测PDF类型，跳过OCR直接提取文本进行翻译。
 
 ## 技术栈
 - **模型推理**: Ollama + deepseek-ocr (支持 NVIDIA CUDA / Apple Silicon Metal / CPU)
@@ -25,12 +25,18 @@ src/deepseek_ocr/
 
 ## 数据流
 ```
-扫描PDF → PDFReader(逐页PNG) → OCREngine(Ollama) → OutputParser(TextBlock+坐标)
-                                                        ├→ DualLayerPDFWriter → 双层PDF
-                                                        ├→ MarkdownWriter → .md文件
-                                                        └→ Translator(OpenAI API) → TranslatedPDFWriter
-                                                              ├→ 目标语言PDF ({stem}_{lang}.pdf)
-                                                              └→ 双语对照PDF ({stem}_bilingual.pdf)
+PDF → PDFTypeDetector(自动检测类型)
+  ├─ [扫描PDF] → PDFReader(逐页PNG) → OCREngine(Ollama) → OutputParser(TextBlock+坐标)
+  │                                                          ├→ DualLayerPDFWriter → 双层PDF
+  │                                                          ├→ MarkdownWriter → .md文件
+  │                                                          └→ Translator → TranslatedPDFWriter
+  │                                                                ├→ 目标语言PDF ({stem}_{lang}.pdf)
+  │                                                                └→ 双语对照PDF ({stem}_bilingual.pdf)
+  └─ [文本PDF] → TextPDFExtractor(PyMuPDF直接提取) → ParsedPage
+                                                       ├→ MarkdownWriter → .md文件
+                                                       └→ Translator → TextPDFTranslatedWriter(show_pdf_page保留矢量)
+                                                             ├→ 目标语言PDF ({stem}_{lang}.pdf)
+                                                             └→ 双语对照PDF ({stem}_bilingual.pdf)
 ```
 
 ## 核心概念
@@ -38,6 +44,11 @@ src/deepseek_ocr/
   - `dual_layer`: 底层原始扫描图像 + 上层透明文字层(render_mode=3)，视觉不变但可搜索
   - `rewrite`: 文字区域白色遮盖 + 矢量字体重绘(render_mode=0)，图表/公式保持原始扫描
 - **归一化坐标**: DeepSeek-OCR输出坐标范围0-999，需转换为PDF坐标: `pdf_coord = model_coord / 999 * page_dimension`
+- **PDF类型自动检测**: `PDFTypeDetector` 采样前5页统计文本字符数，>100字符/页判定为文本PDF
+  - 文本PDF：跳过OCR，用 `TextPDFExtractor` 通过 PyMuPDF `get_text("dict")` 直接提取文本+坐标
+  - 扫描PDF：走原有OCR流程
+  - 两条路径在 `ParsedPage` 层面汇合，翻译/Markdown/缓存完全复用
+- **文本PDF翻译输出**: `TextPDFTranslatedWriter` 使用 `show_pdf_page()` 保留原始矢量内容（非扫描PNG）
 - **grounding模式**: 使用 `<|grounding|>` 前缀触发带坐标的OCR输出
 - **翻译功能**:
   - 通过 OpenAI 兼容 API 逐页翻译 OCR 文本
