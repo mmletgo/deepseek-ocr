@@ -81,9 +81,123 @@ huggingface-cli download deepseek-ai/DeepSeek-OCR-2
 deepseek-ocr check
 ```
 
-## Usage
+## Quick Start
 
-### CLI
+### 1. Install and verify
+
+```bash
+git clone https://github.com/mmletgo/deepseek-ocr.git
+cd deepseek-ocr
+bash scripts/setup_vllm.sh
+
+# Verify everything is ready
+.venv/bin/deepseek-ocr check
+```
+
+Expected output:
+
+```
+                                     环境检查
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 检查项              ┃ 状态 ┃ 详情                          ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ GPU                 │ 正常 │ NVIDIA GeForce RTX 4090 (...)  │
+│ vLLM                │ 正常 │ vLLM 0.8.5                    │
+│ DeepSeek-OCR-2 模块 │ 正常 │ ...                           │
+│ 模型文件            │ 就绪 │ ...                           │
+│ Flash Attention     │ 正常 │ flash-attn 2.7.3              │
+└─────────────────────┴──────┴───────────────────────────────┘
+所有检查通过，可以开始转换!
+```
+
+### 2. Convert a PDF (CLI)
+
+```bash
+# Activate venv first
+source .venv/bin/activate
+
+# Convert — first run will auto-download the model (~15GB)
+deepseek-ocr convert my_paper.pdf
+```
+
+Output files will be in `./output/my_paper/`:
+
+```
+output/my_paper/
+├── my_paper_ocr.pdf    # Searchable dual-layer PDF
+└── my_paper.md         # Markdown text
+```
+
+### 3. Convert with translation
+
+```bash
+# Translate English paper to Chinese
+deepseek-ocr convert my_paper.pdf \
+  --translate \
+  --translation-api-key sk-your-key \
+  --target-lang "Simplified Chinese"
+```
+
+Output:
+
+```
+output/my_paper/
+├── my_paper_ocr.pdf         # Searchable dual-layer PDF
+├── my_paper.md              # Markdown (original English)
+├── my_paper_si.pdf          # Translated PDF (Chinese)
+└── my_paper_bilingual.pdf   # Side-by-side bilingual PDF
+```
+
+> **Tip**: You can use any OpenAI-compatible API. For example, to use DeepSeek's own API:
+> ```bash
+> deepseek-ocr convert input.pdf --translate \
+>   --translation-base-url https://api.deepseek.com/v1 \
+>   --translation-api-key sk-xxx \
+>   --translation-model deepseek-chat
+> ```
+
+### 4. Use the Web interface
+
+```bash
+deepseek-ocr serve
+```
+
+Open http://localhost:8080, then:
+
+1. Choose output mode: **Dual Layer** or **Rewrite**
+2. Enable translation (optional): Toggle "Translate after OCR", select source/target language
+3. Drag & drop PDF files
+4. Watch real-time progress
+5. Download results when done
+
+### Output modes explained
+
+| Mode | When to use | Result |
+|------|------------|--------|
+| `dual_layer` (default) | Archiving, preserving original look | Original scan with invisible searchable text overlay |
+| `rewrite` | Clean reading, crisp text | White cover + vector font redraw. LaTeX rendered. Charts/images preserved. |
+
+### Output file naming
+
+| File | Description |
+|------|-------------|
+| `{stem}_ocr.pdf` | Searchable dual-layer / rewritten PDF |
+| `{stem}.md` | Extracted Markdown text |
+| `{stem}_{lang}.pdf` | Translated PDF (e.g., `_si.pdf` for Simplified Chinese) |
+| `{stem}_bilingual.pdf` | Side-by-side: original scan (left) + translation (right) |
+
+### Supported translation languages
+
+English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French, Spanish, Russian
+
+### Notes
+
+- **First run**: The model (~15GB) will be auto-downloaded from HuggingFace. Set `HF_ENDPOINT=https://hf-mirror.com` for China users.
+- **GPU memory**: The model uses ~12-16GB VRAM. Adjust `VLLM_GPU_MEMORY_UTILIZATION` (default 0.85) if needed.
+- **OCR caching**: Results are cached by PDF MD5. Re-processing the same file skips OCR and only re-generates outputs.
+- **Text PDF detection**: The tool auto-detects text-based PDFs and extracts text directly, skipping OCR entirely.
+
+## CLI Usage
 
 ```bash
 # Check environment (GPU, vLLM, model, etc.)
@@ -340,9 +454,123 @@ huggingface-cli download deepseek-ai/DeepSeek-OCR-2
 deepseek-ocr check
 ```
 
-## 使用方法
+## 快速开始
 
-### 命令行
+### 1. 安装并验证环境
+
+```bash
+git clone https://github.com/mmletgo/deepseek-ocr.git
+cd deepseek-ocr
+bash scripts/setup_vllm.sh
+
+# 验证所有组件就绪
+.venv/bin/deepseek-ocr check
+```
+
+预期输出：
+
+```
+                                     环境检查
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 检查项              ┃ 状态 ┃ 详情                          ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ GPU                 │ 正常 │ NVIDIA GeForce RTX 4090 (...)  │
+│ vLLM                │ 正常 │ vLLM 0.8.5                    │
+│ DeepSeek-OCR-2 模块 │ 正常 │ ...                           │
+│ 模型文件            │ 就绪 │ ...                           │
+│ Flash Attention     │ 正常 │ flash-attn 2.7.3              │
+└─────────────────────┴──────┴───────────────────────────────┘
+所有检查通过，可以开始转换!
+```
+
+### 2. 转换 PDF（命令行）
+
+```bash
+# 先激活虚拟环境
+source .venv/bin/activate
+
+# 转换 — 首次运行会自动下载模型（约 15GB）
+deepseek-ocr convert my_paper.pdf
+```
+
+输出文件在 `./output/my_paper/`：
+
+```
+output/my_paper/
+├── my_paper_ocr.pdf    # 可搜索双层 PDF
+└── my_paper.md         # Markdown 文本
+```
+
+### 3. 转换并翻译
+
+```bash
+# 将英文论文翻译为中文
+deepseek-ocr convert my_paper.pdf \
+  --translate \
+  --translation-api-key sk-your-key \
+  --target-lang "Simplified Chinese"
+```
+
+输出：
+
+```
+output/my_paper/
+├── my_paper_ocr.pdf         # 可搜索双层 PDF
+├── my_paper.md              # Markdown（英文原文）
+├── my_paper_si.pdf          # 翻译版 PDF（中文）
+└── my_paper_bilingual.pdf   # 双语对照 PDF（左原文右翻译）
+```
+
+> **提示**：支持任何 OpenAI 兼容 API。例如使用 DeepSeek API：
+> ```bash
+> deepseek-ocr convert input.pdf --translate \
+>   --translation-base-url https://api.deepseek.com/v1 \
+>   --translation-api-key sk-xxx \
+>   --translation-model deepseek-chat
+> ```
+
+### 4. 使用 Web 界面
+
+```bash
+deepseek-ocr serve
+```
+
+浏览器打开 http://localhost:8080，然后：
+
+1. 选择输出模式：**双层模式 (Dual Layer)** 或 **重绘模式 (Rewrite)**
+2. 启用翻译（可选）：打开 "Translate after OCR" 开关，选择源语言和目标语言
+3. 拖拽上传 PDF 文件
+4. 实时查看处理进度
+5. 完成后下载结果
+
+### 输出模式对比
+
+| 模式 | 适用场景 | 效果 |
+|------|---------|------|
+| `dual_layer`（默认） | 归档、保留原始外观 | 原始扫描图像 + 不可见可搜索文字层 |
+| `rewrite` | 清晰阅读、文字锐利 | 白色遮盖 + 矢量字体重绘，LaTeX 公式渲染，图表保留原始扫描 |
+
+### 输出文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `{stem}_ocr.pdf` | 可搜索双层 / 重绘 PDF |
+| `{stem}.md` | 提取的 Markdown 文本 |
+| `{stem}_{lang}.pdf` | 翻译版 PDF（如 `_si.pdf` 为简体中文） |
+| `{stem}_bilingual.pdf` | 双语对照 PDF（左半页原文扫描，右半页翻译文字） |
+
+### 支持的翻译语言
+
+English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español、Русский
+
+### 注意事项
+
+- **首次运行**：模型（约 15GB）会自动从 HuggingFace 下载。国内用户请设置 `export HF_ENDPOINT=https://hf-mirror.com` 加速。
+- **GPU 显存**：模型占用约 12-16GB 显存。可通过 `VLLM_GPU_MEMORY_UTILIZATION` 调整（默认 0.85）。
+- **OCR 缓存**：按 PDF 的 MD5 缓存 OCR 结果，重复处理同一文件会跳过 OCR 只重新生成输出。
+- **文本 PDF 检测**：自动检测文本类型 PDF 并直接提取文字，完全跳过 OCR。
+
+## 命令行详细说明
 
 ```bash
 # 检查环境（GPU、vLLM、模型等）
