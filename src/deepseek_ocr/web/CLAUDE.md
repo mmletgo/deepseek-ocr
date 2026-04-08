@@ -27,6 +27,9 @@
 
 ## 并发控制
 - `_ocr_semaphore: asyncio.Semaphore(1)` 串行化GPU OCR，避免显存溢出
+- **全局OCR引擎单例**: vLLM引擎重量级，使用 `_global_ocr_engine` 全局单例共享
+  - `get_ocr_engine()` 懒加载初始化（AsyncLLMEngine模式）
+  - 应用关闭时通过 `lifespan` 调用 `shutdown()` 释放资源
 - `_generating_semaphore: asyncio.Semaphore(1)` 串行化PDF生成，避免PyMuPDF GIL争用
 - `_translation_semaphore: asyncio.Semaphore(2)` 限制翻译并发（最多2个翻译任务同时运行）
 - phase 状态: `waiting_ocr` → OCR排队；`waiting_generate` → PDF生成排队；`waiting_translate` → 翻译排队

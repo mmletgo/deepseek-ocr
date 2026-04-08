@@ -6,7 +6,7 @@ Business Logic:
     PDF读取 -> OCR识别 -> 文本解析 -> 双层PDF生成 -> Markdown生成。
 
 Code Logic:
-    初始化所有子模块(PDFReader, OCREngine, OutputParser, DualLayerPDFWriter, MarkdownWriter)，
+    初始化所有子模块(PDFReader, OCREngine(vLLM), OutputParser, DualLayerPDFWriter, MarkdownWriter)，
     按顺序调用各模块处理，支持进度回调和同步/异步两种接口。
 """
 
@@ -61,7 +61,7 @@ class ConversionPipeline:
             如果配置了翻译API密钥，还会初始化Translator和TranslatedPDFWriter。
 
         Code Logic:
-            根据AppConfig初始化PDFReader(使用pdf配置)、OCREngine(使用ollama配置)、
+            根据AppConfig初始化PDFReader(使用pdf配置)、OCREngine(使用vllm配置)、
             OutputParser、DualLayerPDFWriter和MarkdownWriter。
             如果translation.api_key非空，初始化Translator和TranslatedPDFWriter。
             保存进度回调函数。
@@ -74,7 +74,7 @@ class ConversionPipeline:
             dpi=config.pdf.dpi,
             max_dimension=config.pdf.max_dimension,
         )
-        self.ocr_engine: OCREngine = OCREngine(config.ollama)
+        self.ocr_engine: OCREngine = OCREngine(config.vllm)
         self.parser: OutputParser = OutputParser()
         self.pdf_writer: DualLayerPDFWriter = DualLayerPDFWriter()
         self.markdown_writer: MarkdownWriter = MarkdownWriter()
@@ -85,6 +85,9 @@ class ConversionPipeline:
         else:
             self.translator = None
             self.translated_pdf_writer = None
+
+        # 初始化OCR引擎（加载模型到GPU）
+        self.ocr_engine.initialize()
 
         logger.info("ConversionPipeline初始化完成")
 

@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deepseek-ocr"
-version = "0.1.0"
-description = "使用 DeepSeek-OCR 模型将英文扫描PDF转化为可搜索PDF和Markdown"
+version = "0.2.0"
+description = "使用 DeepSeek-OCR-2 模型将英文扫描PDF转化为可搜索PDF和Markdown"
 requires-python = ">=3.12"
 
 dependencies = [
-    "ollama>=0.4",
+    "vllm==0.8.5",
+    "torch>=2.6.0",
+    "transformers>=4.46.3",
     "PyMuPDF>=1.25",
     "click>=8.0",
     "rich>=13.0",
@@ -21,6 +23,7 @@ dependencies = [
     "matplotlib>=3.8",
     "openai>=1.0",
     "python-dotenv>=1.0",
+    "huggingface_hub>=0.20",
 ]
 
 [project.optional-dependencies]

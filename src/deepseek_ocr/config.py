@@ -1,6 +1,6 @@
 """
 Business Logic:
-    集中管理所有配置项，包括Ollama连接、PDF渲染参数、Web服务等，
+    集中管理所有配置项，包括vLLM推理引擎、PDF渲染参数、Web服务等，
     避免配置散落在各模块中。
 
 Code Logic:
@@ -24,12 +24,16 @@ class PDFOutputMode(StrEnum):
 
 
 @dataclass
-class OllamaConfig:
-    """Ollama服务配置"""
-    host: str = field(default_factory=lambda: os.getenv("OLLAMA_HOST", "http://localhost:11434"))
-    model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "deepseek-ocr"))
-    timeout: int = field(default_factory=lambda: int(os.getenv("OLLAMA_TIMEOUT", "300")))
-    keep_alive: int = field(default_factory=lambda: int(os.getenv("OLLAMA_KEEP_ALIVE", "-1")))
+class VLLMConfig:
+    """vLLM推理引擎配置"""
+    model_path: str = field(default_factory=lambda: os.getenv("VLLM_MODEL_PATH", "deepseek-ai/DeepSeek-OCR-2"))
+    gpu_memory_utilization: float = field(default_factory=lambda: float(os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.85")))
+    max_model_len: int = field(default_factory=lambda: int(os.getenv("VLLM_MAX_MODEL_LEN", "8192")))
+    dtype: str = field(default_factory=lambda: os.getenv("VLLM_DTYPE", "bfloat16"))
+    tensor_parallel_size: int = field(default_factory=lambda: int(os.getenv("VLLM_TENSOR_PARALLEL_SIZE", "1")))
+    max_retries: int = field(default_factory=lambda: int(os.getenv("VLLM_MAX_RETRIES", "3")))
+    retry_delay: float = field(default_factory=lambda: float(os.getenv("VLLM_RETRY_DELAY", "2.0")))
+    max_concurrency: int = field(default_factory=lambda: int(os.getenv("VLLM_MAX_CONCURRENCY", "100")))
 
 
 @dataclass
@@ -64,7 +68,7 @@ class TranslationConfig:
 @dataclass
 class AppConfig:
     """应用全局配置"""
-    ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    vllm: VLLMConfig = field(default_factory=VLLMConfig)
     pdf: PDFConfig = field(default_factory=PDFConfig)
     web: WebConfig = field(default_factory=WebConfig)
     translation: TranslationConfig = field(default_factory=TranslationConfig)

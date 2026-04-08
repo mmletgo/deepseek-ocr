@@ -5,7 +5,7 @@
 | 文件 | 职责 |
 |------|------|
 | `pdf_reader.py` | 将扫描PDF每页渲染为PNG图片 (PDFReader, PageImage) |
-| `ocr_engine.py` | 通过Ollama调用DeepSeek-OCR模型 (OCREngine, OCRResult, PromptMode) |
+| `ocr_engine.py` | 通过vLLM调用DeepSeek-OCR-2模型 (OCREngine, OCRResult, PromptMode) |
 | `output_parser.py` | 解析ref/det坐标标签 (OutputParser, TextBlock, ParsedPage) |
 | `pdf_writer.py` | 生成PDF: 支持dual_layer(透明文字层)和rewrite(矢量重绘)两种模式 (DualLayerPDFWriter) |
 | `markdown_writer.py` | 输出Markdown文件 (MarkdownWriter) |

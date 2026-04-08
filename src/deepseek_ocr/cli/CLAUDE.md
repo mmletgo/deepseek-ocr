@@ -7,9 +7,9 @@
 
 | 命令 | 功能 |
 |------|------|
-| `convert <path>` | 转换PDF文件或目录，支持 --output/-o, --dpi, --no-pdf, --no-markdown, --model, --ollama-host, --pdf-mode, --translate, --source-lang, --target-lang, --translation-model, --translation-base-url, --translation-api-key |
-| `translate <path>` | 翻译扫描PDF（等效于 convert --translate），支持 --output/-o, --source-lang, --target-lang, --dpi, --model, --ollama-host, --translation-model, --translation-base-url, --translation-api-key |
-| `check` | 检查Ollama服务和模型状态 |
+| `convert <path>` | 转换PDF文件或目录，支持 --output/-o, --dpi, --no-pdf, --no-markdown, --model-path, --pdf-mode, --translate, --source-lang, --target-lang, --translation-model, --translation-base-url, --translation-api-key |
+| `translate <path>` | 翻译扫描PDF（等效于 convert --translate），支持 --output/-o, --source-lang, --target-lang, --dpi, --model-path, --translation-model, --translation-base-url, --translation-api-key |
+| `check` | 检查GPU、vLLM、DeepSeek-OCR-2模块、模型文件、flash-attn |
 | `serve` | 启动FastAPI Web服务，支持 --host, --port |
 
 ## 内部函数
@@ -26,6 +26,6 @@
 
 ## 依赖
 - `ConversionPipeline` (core/pipeline.py) 执行转换
-- `OCREngine.check_health()` 检查环境
+- `OCREngine.check_health()` 检查环境（GPU、vLLM、模型文件）
 - `TranslationConfig` (config.py) 翻译配置
 - Rich Progress/Table/Panel 美化输出

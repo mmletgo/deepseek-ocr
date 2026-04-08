@@ -11,6 +11,12 @@ Code Logic:
     并发控制：
     - _ocr_semaphore: Semaphore(1) 串行化GPU OCR步骤，避免显存溢出
     - _generating_semaphore: Semaphore(1) 串行化PDF生成步骤，避免PyMuPDF GIL争用
+    - _translation_semaphore: Semaphore(2) 限制翻译并发（最多2个翻译任务同时运行）
+
+    全局OCR引擎单例：
+    - vLLM引擎加载模型到GPU是重量级操作，使用全局单例 _global_ocr_engine 共享
+    - 通过 get_ocr_engine() 懒加载初始化，支持 AsyncLLMEngine 异步推理
+    - 应用关闭时通过 lifespan 释放引擎资源
 
     OCR缓存：
     - 以PDF的MD5哈希为key，每页OCR结果持久化到 uploads/ocr_cache/{md5}/page_NNNN.json
@@ -70,6 +76,27 @@ def _get_translation_semaphore() -> asyncio.Semaphore:
     if _translation_semaphore is None:
         _translation_semaphore = asyncio.Semaphore(2)
     return _translation_semaphore
+
+
+# 全局 OCR 引擎单例（vLLM 引擎重量级，全局共享）
+_global_ocr_engine: Any = None
+_engine_lock: asyncio.Lock | None = None
+
+
+async def get_ocr_engine() -> Any:
+    """获取或初始化全局 OCREngine（AsyncLLMEngine 模式），懒加载单例"""
+    global _global_ocr_engine, _engine_lock
+    from deepseek_ocr.core.ocr_engine import OCREngine
+    if _engine_lock is None:
+        _engine_lock = asyncio.Lock()
+    async with _engine_lock:
+        if _global_ocr_engine is None:
+            config = AppConfig()
+            engine = OCREngine(config.vllm, async_mode=True)
+            await engine.initialize_async()
+            _global_ocr_engine = engine
+            logger.info("全局 OCREngine 已初始化 (AsyncLLMEngine)")
+    return _global_ocr_engine
 
 
 @router.get("/")
@@ -205,7 +232,7 @@ async def _run_conversion(task_id: str) -> None:
     try:
         import time
         from deepseek_ocr.core.pdf_reader import PDFReader, PageImage
-        from deepseek_ocr.core.ocr_engine import OCREngine, OCRResult
+        from deepseek_ocr.core.ocr_engine import OCRResult
         from deepseek_ocr.core.output_parser import OutputParser, ParsedPage
         from deepseek_ocr.core.pdf_writer import DualLayerPDFWriter
         from deepseek_ocr.core.markdown_writer import MarkdownWriter
@@ -219,7 +246,7 @@ async def _run_conversion(task_id: str) -> None:
             dpi=config.pdf.dpi,
             max_dimension=config.pdf.max_dimension,
         )
-        ocr_engine = OCREngine(config.ollama)
+        ocr_engine = await get_ocr_engine()
         parser = OutputParser()
         pdf_writer = DualLayerPDFWriter()
         markdown_writer = MarkdownWriter()
@@ -712,43 +739,36 @@ async def download_result(task_id: str, file_type: str) -> FileResponse:
 async def health_check() -> dict[str, Any]:
     """
     Business Logic:
-        运维和前端需要检查后端服务、Ollama连接、模型是否可用，
+        检查后端服务状态、GPU可用性、模型文件和引擎加载状态，
         用于服务健康监控和用户提示。
 
     Code Logic:
-        检查Ollama服务是否可连接，检查所需模型是否已加载。
-        返回各组件的状态信息。
+        检查 GPU (torch.cuda)、模型文件路径、vLLM 引擎加载状态。
     """
     config = AppConfig()
     health: dict[str, Any] = {
         "service": "ok",
-        "ollama": "unknown",
-        "model": config.ollama.model,
+        "engine": "vllm",
+        "model": config.vllm.model_path,
     }
 
+    # 检查 GPU
     try:
-        import ollama
-        client = ollama.Client(host=config.ollama.host)
-        # 尝试列出模型
-        models_response = client.list()
-        available_models: list[str] = []
-        if hasattr(models_response, "models"):
-            available_models = [m.model for m in models_response.models]
-        elif isinstance(models_response, dict) and "models" in models_response:
-            available_models = [m.get("model", "") for m in models_response["models"]]
-
-        health["ollama"] = "connected"
-        health["available_models"] = available_models
-
-        # 检查目标模型是否存在
-        model_found: bool = any(
-            config.ollama.model in m for m in available_models
-        )
-        health["model_available"] = model_found
-
+        import torch
+        health["gpu_available"] = torch.cuda.is_available()
+        if torch.cuda.is_available():
+            health["gpu_name"] = torch.cuda.get_device_name(0)
+            gpu_mem: float = torch.cuda.get_device_properties(0).total_mem / 1e9
+            health["gpu_memory_total"] = f"{gpu_mem:.1f} GB"
     except ImportError:
-        health["ollama"] = "ollama package not installed"
-    except Exception as e:
-        health["ollama"] = f"error: {str(e)}"
+        health["gpu_available"] = False
+
+    # 检查引擎是否已加载
+    health["engine_loaded"] = _global_ocr_engine is not None
+
+    # 检查模型文件
+    from pathlib import Path
+    model_path_obj = Path(config.vllm.model_path)
+    health["model_path_valid"] = model_path_obj.exists()
 
     return health

@@ -32,7 +32,6 @@ from rich.table import Table
 
 from deepseek_ocr.config import AppConfig, PDFOutputMode
 from deepseek_ocr.core.pipeline import ConversionPipeline, ConversionResult
-from deepseek_ocr.core.ocr_engine import OCREngine
 from deepseek_ocr.utils.logger import logger
 
 console = Console()
@@ -88,8 +87,7 @@ def _run_convert(
     dpi: int | None,
     no_pdf: bool,
     no_markdown: bool,
-    model: str | None,
-    ollama_host: str | None,
+    model_path: str | None,
     pdf_mode: str | None,
     translate: bool,
     source_lang: str | None,
@@ -115,10 +113,8 @@ def _run_convert(
     config = AppConfig()
 
     # CLI 参数覆盖（非 None 时生效）
-    if ollama_host is not None:
-        config.ollama.host = ollama_host
-    if model is not None:
-        config.ollama.model = model
+    if model_path is not None:
+        config.vllm.model_path = model_path
     if dpi is not None:
         config.pdf.dpi = dpi
     if pdf_mode is not None:
@@ -162,7 +158,7 @@ def _run_convert(
         f"[bold]输出:[/bold] {resolved_output}\n"
         f"[bold]文件数:[/bold] {len(pdf_files)}    "
         f"[bold]DPI:[/bold] {config.pdf.dpi}    "
-        f"[bold]模型:[/bold] {config.ollama.model}\n"
+        f"[bold]模型路径:[/bold] {config.vllm.model_path}\n"
         f"[bold]生成PDF:[/bold] {'是' if generate_pdf else '否'}    "
         f"[bold]生成Markdown:[/bold] {'是' if generate_markdown else '否'}    "
         f"[bold]PDF模式:[/bold] {config.pdf.output_mode.value}"
@@ -279,8 +275,7 @@ def _run_convert(
 @click.option("--dpi", default=None, type=int, help="PDF渲染DPI (env: PDF_DPI, 默认200)")
 @click.option("--no-pdf", "no_pdf", is_flag=True, default=False, help="不生成双层PDF")
 @click.option("--no-markdown", "no_markdown", is_flag=True, default=False, help="不生成Markdown")
-@click.option("--model", default=None, help="Ollama模型名称 (env: OLLAMA_MODEL, 默认 deepseek-ocr)")
-@click.option("--ollama-host", default=None, help="Ollama服务地址 (env: OLLAMA_HOST, 默认 http://localhost:11434)")
+@click.option("--model-path", default=None, help="模型路径 (HuggingFace ID 或本地路径, env: VLLM_MODEL_PATH)")
 @click.option("--pdf-mode", "pdf_mode", type=click.Choice(["dual_layer", "rewrite"], case_sensitive=False), default=None, help="PDF输出模式: dual_layer(双层) / rewrite(重绘) (env: PDF_OUTPUT_MODE)")
 @click.option("--translate", is_flag=True, default=False, help="启用LLM翻译")
 @click.option("--source-lang", default=None, help="源语言 (默认: English)")
@@ -294,8 +289,7 @@ def convert(
     dpi: int | None,
     no_pdf: bool,
     no_markdown: bool,
-    model: str | None,
-    ollama_host: str | None,
+    model_path: str | None,
     pdf_mode: str | None,
     translate: bool,
     source_lang: str | None,
@@ -311,8 +305,7 @@ def convert(
         dpi=dpi,
         no_pdf=no_pdf,
         no_markdown=no_markdown,
-        model=model,
-        ollama_host=ollama_host,
+        model_path=model_path,
         pdf_mode=pdf_mode,
         translate=translate,
         source_lang=source_lang,
@@ -332,8 +325,7 @@ def convert(
 @click.option("--source-lang", default=None, help="源语言 (默认: English)")
 @click.option("--target-lang", default=None, help="目标语言 (默认: Simplified Chinese)")
 @click.option("--dpi", default=None, type=int, help="PDF渲染DPI (env: PDF_DPI, 默认200)")
-@click.option("--model", default=None, help="OCR模型名 (env: OLLAMA_MODEL, 默认 deepseek-ocr)")
-@click.option("--ollama-host", default=None, help="Ollama服务地址 (env: OLLAMA_HOST, 默认 http://localhost:11434)")
+@click.option("--model-path", default=None, help="模型路径 (HuggingFace ID 或本地路径, env: VLLM_MODEL_PATH)")
 @click.option("--translation-model", default=None, help="翻译LLM模型名 (env: TRANSLATION_MODEL)")
 @click.option("--translation-base-url", default=None, help="翻译API base_url (env: TRANSLATION_BASE_URL)")
 @click.option("--translation-api-key", default=None, help="翻译API key (env: TRANSLATION_API_KEY)")
@@ -343,8 +335,7 @@ def translate(
     source_lang: str | None,
     target_lang: str | None,
     dpi: int | None,
-    model: str | None,
-    ollama_host: str | None,
+    model_path: str | None,
     translation_model: str | None,
     translation_base_url: str | None,
     translation_api_key: str | None,
@@ -356,8 +347,7 @@ def translate(
         dpi=dpi,
         no_pdf=False,
         no_markdown=False,
-        model=model,
-        ollama_host=ollama_host,
+        model_path=model_path,
         pdf_mode=None,
         translate=True,
         source_lang=source_lang,
@@ -372,82 +362,138 @@ def translate(
 # check 命令
 # ---------------------------------------------------------------------------
 @cli.command()
-@click.option("--ollama-host", default=None, help="Ollama服务地址 (env: OLLAMA_HOST, 默认 http://localhost:11434)")
-@click.option("--model", default=None, help="Ollama模型名称 (env: OLLAMA_MODEL, 默认 deepseek-ocr)")
-def check(ollama_host: str | None, model: str | None) -> None:
+@click.option("--model-path", default=None, help="模型路径 (env: VLLM_MODEL_PATH)")
+def check(model_path: str | None) -> None:
     """
     Business Logic:
-        在正式转换前，让用户快速确认运行环境是否就绪——Ollama 服务是否
-        可达、所需模型是否已拉取。
+        检查运行环境是否就绪：GPU、vLLM、模型文件、依赖模块。
 
     Code Logic:
-        1. 构建 AppConfig 获取 .env 默认值，然后用非 None 的 CLI 参数覆盖
-        2. 实例化 OCREngine
-        3. 调用 check_health() 判断服务状态
-        4. 通过 ollama 库列出已有模型，检查目标模型是否存在
-        5. 用 Rich Table 展示检查结果
+        1. 构建 AppConfig 获取配置
+        2. 检查 GPU 可用性（torch.cuda）
+        3. 检查 vLLM 是否已安装
+        4. 检查 DeepSeek-OCR-2 模块是否可用
+        5. 检查模型文件路径是否有效
+        6. 用 Rich Table 展示检查结果
     """
     config = AppConfig()
-    if ollama_host is not None:
-        config.ollama.host = ollama_host
-    if model is not None:
-        config.ollama.model = model
+    if model_path is not None:
+        config.vllm.model_path = model_path
 
-    effective_host: str = config.ollama.host
-    effective_model: str = config.ollama.model
-
-    engine = OCREngine(config.ollama)
+    effective_model_path: str = config.vllm.model_path
 
     check_table = Table(title="环境检查", border_style="cyan")
     check_table.add_column("检查项", style="bold")
     check_table.add_column("状态", justify="center")
     check_table.add_column("详情")
 
-    # 检查 Ollama 服务
-    ollama_ok: bool = False
+    all_ok: bool = True
+
+    # 检查 GPU
+    gpu_ok: bool = False
+    gpu_detail: str = ""
     try:
-        ollama_ok = engine.check_health()
-    except Exception as exc:
-        logger.debug(f"Ollama 健康检查异常: {exc}")
+        import torch
+        if torch.cuda.is_available():
+            gpu_ok = True
+            gpu_name: str = torch.cuda.get_device_name(0)
+            gpu_mem: float = torch.cuda.get_device_properties(0).total_mem / 1e9
+            gpu_detail = f"{gpu_name} ({gpu_mem:.1f} GB)"
+        else:
+            gpu_detail = "CUDA 不可用"
+    except ImportError:
+        gpu_detail = "torch 未安装"
 
-    if ollama_ok:
-        check_table.add_row("Ollama 服务", "[green]正常[/green]", f"地址: {effective_host}")
+    if gpu_ok:
+        check_table.add_row("GPU", "[green]正常[/green]", gpu_detail)
     else:
-        check_table.add_row("Ollama 服务", "[red]不可用[/red]", f"无法连接 {effective_host}")
+        check_table.add_row("GPU", "[red]不可用[/red]", gpu_detail)
+        all_ok = False
 
-    # 检查模型是否已拉取
+    # 检查 vLLM
+    vllm_ok: bool = False
+    vllm_detail: str = ""
+    try:
+        import vllm
+        vllm_ok = True
+        vllm_detail = f"vLLM {vllm.__version__}"
+    except ImportError:
+        vllm_detail = "未安装"
+    except Exception as e:
+        vllm_detail = f"导入错误: {e}"
+
+    if vllm_ok:
+        check_table.add_row("vLLM", "[green]正常[/green]", vllm_detail)
+    else:
+        check_table.add_row("vLLM", "[red]不可用[/red]", vllm_detail)
+        all_ok = False
+
+    # 检查 DeepSeek-OCR-2 模块
+    ocr2_ok: bool = False
+    ocr2_detail: str = ""
+    try:
+        from deepseek_ocr2 import DeepseekOCR2ForCausalLM
+        from process.image_process import DeepseekOCR2Processor
+        from process.ngram_norepeat import NoRepeatNGramLogitsProcessor
+        ocr2_ok = True
+        ocr2_detail = "DeepseekOCR2ForCausalLM + Processor + LogitsProcessor"
+    except ImportError as e:
+        ocr2_detail = f"未安装: {e}"
+
+    if ocr2_ok:
+        check_table.add_row("DeepSeek-OCR-2 模块", "[green]正常[/green]", ocr2_detail)
+    else:
+        check_table.add_row("DeepSeek-OCR-2 模块", "[red]不可用[/red]", ocr2_detail)
+        all_ok = False
+
+    # 检查模型文件
+    from pathlib import Path
     model_ok: bool = False
-    if ollama_ok:
+    model_detail: str = ""
+    model_path_obj = Path(effective_model_path)
+    if model_path_obj.exists():
+        model_ok = True
+        model_detail = f"本地路径: {effective_model_path}"
+    else:
+        # 可能是 HuggingFace repo ID
         try:
-            import ollama as ollama_lib
-            client = ollama_lib.Client(host=effective_host)
-            model_list = client.list()
-            available_models: List[str] = [m.model for m in model_list.models]
-            # 模型名可能带 :latest 后缀，做宽松匹配
-            model_ok = any(
-                m == effective_model or m.startswith(f"{effective_model}:") for m in available_models
-            )
-        except Exception as exc:
-            logger.debug(f"模型列表获取异常: {exc}")
+            from huggingface_hub import scan_cache_dir
+            model_detail = f"HuggingFace ID: {effective_model_path} (将自动下载)"
+            model_ok = True  # 允许自动下载
+        except ImportError:
+            model_detail = f"路径不存在: {effective_model_path}"
 
     if model_ok:
-        check_table.add_row("OCR 模型", "[green]已就绪[/green]", f"模型: {effective_model}")
-    elif ollama_ok:
-        check_table.add_row(
-            "OCR 模型",
-            "[yellow]未找到[/yellow]",
-            f"请运行: ollama pull {effective_model}",
-        )
+        check_table.add_row("模型文件", "[green]就绪[/green]", model_detail)
     else:
-        check_table.add_row("OCR 模型", "[dim]跳过[/dim]", "Ollama 服务不可用，无法检查模型")
+        check_table.add_row("模型文件", "[red]未找到[/red]", model_detail)
+        all_ok = False
+
+    # 检查 flash-attn（可选）
+    flash_ok: bool = False
+    flash_detail: str = ""
+    try:
+        import flash_attn
+        flash_ok = True
+        flash_detail = f"flash-attn {flash_attn.__version__}"
+    except ImportError:
+        flash_detail = "未安装（可选，影响性能）"
+    except Exception:
+        flash_detail = "导入失败（可选）"
+
+    if flash_ok:
+        check_table.add_row("Flash Attention", "[green]正常[/green]", flash_detail)
+    else:
+        check_table.add_row("Flash Attention", "[yellow]未安装[/yellow]", flash_detail)
 
     console.print()
     console.print(check_table)
 
-    if ollama_ok and model_ok:
+    if all_ok:
         console.print("\n[bold green]所有检查通过，可以开始转换![/bold green]")
     else:
         console.print("\n[bold yellow]部分检查未通过，请根据上述提示修复后重试。[/bold yellow]")
+        console.print("[dim]提示: 运行 scripts/setup_vllm.sh 安装依赖[/dim]")
 
 
 # ---------------------------------------------------------------------------
