@@ -1,0 +1,36 @@
+# Core dependencies
+vllm==0.8.5
+torch>=2.6.0
+transformers>=4.46.3
+huggingface_hub>=0.20
+
+# PDF processing
+PyMuPDF>=1.25
+Pillow>=12.0
+matplotlib>=3.8
+
+# CLI
+click>=8.0
+rich>=13.0
+
+# Web server
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+sse-starlette>=2.0
+
+# Translation
+openai>=1.0
+
+# Config
+python-dotenv>=1.0
+
+# DeepSeek-OCR-2 inference module dependencies
+# (installed via .deepseek-ocr2/ from GitHub repo)
+addict
+easydict
+einops
+
+# Optional (performance)
+# flash-attn>=2.7.3  # requires matching CUDA version, install separately:
+# pip install flash-attn==2.7.3 --no-build-isolation

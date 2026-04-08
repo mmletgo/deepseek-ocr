@@ -1,66 +1,84 @@
 # DeepSeek-OCR
 
-A local-first tool that converts scanned English PDFs into **searchable dual-layer PDFs** and **Markdown** files, powered by the [DeepSeek-OCR](https://ollama.com/library/deepseek-ocr) model running on [Ollama](https://ollama.com).
+A local-first tool that converts scanned English PDFs into **searchable dual-layer PDFs** and **Markdown** files, powered by [DeepSeek-OCR-2](https://huggingface.co/deepseek-ai/DeepSeek-OCR-2) model with [vLLM](https://github.com/vllm-project/vllm) inference. Supports translating OCR results into target languages via OpenAI-compatible LLM APIs, producing translated PDFs and bilingual side-by-side PDFs.
 
 All processing happens locally on your machine — no cloud API calls, no data leaves your device.
 
 ## Features
 
+- **DeepSeek-OCR-2 model** — Latest Visual Causal Flow architecture with DeepEncoder V2 for superior OCR quality
+- **vLLM inference** — High-performance GPU inference with Flash Attention, running in-process (no separate service)
 - **Two PDF output modes**:
   - **Dual Layer** — Original scanned images preserved with an invisible, searchable text layer. Visually identical to the original, fully searchable and selectable.
   - **Rewrite** — Text areas are redrawn with vector fonts for crisp, clear text. Charts, images, and tables are preserved from the original scan. LaTeX formulas are rendered with matplotlib's mathtext engine.
 - **Markdown output** — Clean Markdown extraction of document text.
-- **LaTeX formula rendering** — Mathematical equations (both display `\[...\]` and inline `\(...\)`) are rendered as proper math symbols in Rewrite mode, with automatic fallback to original scan for unsupported formulas.
-- **Multi-process parallel rendering** — PDF generation uses `ProcessPoolExecutor` with forkserver for true multi-core acceleration.
-- **OCR result caching** — Per-page OCR results are cached by PDF MD5 hash, enabling instant re-generation without re-running OCR.
-- **GPU accelerated** — Supports NVIDIA CUDA (Linux), Apple Silicon Metal (macOS), and CPU fallback.
-- **CLI + Web interface** — Command line for scripting/automation, or drag-and-drop web UI with real-time progress via SSE.
+- **Translation** — Translate OCR results to target languages via OpenAI-compatible LLM API, generating translated PDFs and bilingual side-by-side PDFs
+- **Text PDF support** — Automatically detects text-based (non-scanned) PDFs, extracts text directly without OCR
+- **LaTeX formula rendering** — Mathematical equations (both display `\[...\]` and inline `\(...\)`) are rendered as proper math symbols in Rewrite mode
+- **Multi-process parallel rendering** — PDF generation uses `ProcessPoolExecutor` with forkserver for true multi-core acceleration
+- **OCR result caching** — Per-page OCR results are cached by PDF MD5 hash, enabling instant re-generation without re-running OCR
+- **GPU accelerated** — Requires NVIDIA GPU with CUDA support
+- **CLI + Web interface** — Command line for scripting/automation, or drag-and-drop web UI with real-time progress via SSE
 
 ## Requirements
 
 - **Python** 3.12+
-- **Ollama** installed and running
-- **deepseek-ocr** model pulled (~6.7 GB)
-
-### Platform Support
-
-| Platform | GPU Acceleration |
-|----------|-----------------|
-| Linux (Ubuntu) | NVIDIA CUDA |
-| macOS | Apple Silicon Metal |
-| Any | CPU (slower) |
+- **NVIDIA GPU** with CUDA 11.8+ (e.g., RTX 3090/4090, A100)
+- **CUDA toolkit** (optional but recommended)
+- **~20 GB disk space** for model weights + dependencies
 
 ## Installation
 
-### 1. Set up Ollama and the model
-
-```bash
-# Install Ollama (see https://ollama.com for your platform)
-# Linux:
-curl -fsSL https://ollama.com/install.sh | sh
-
-# macOS:
-brew install ollama
-
-# Start Ollama and pull the model
-ollama serve               # Start the service (or use systemd)
-ollama pull deepseek-ocr   # Download the model (~6.7GB)
-```
-
-### 2. Install DeepSeek-OCR
+### Quick Install
 
 ```bash
 git clone https://github.com/mmletgo/deepseek-ocr.git
 cd deepseek-ocr
-python -m venv .venv
+bash scripts/setup_vllm.sh
+```
+
+The setup script will:
+1. Check NVIDIA GPU and CUDA
+2. Create Python virtual environment (`.venv`)
+3. Install PyTorch 2.6.0 + vLLM 0.8.5 + Flash Attention
+4. Download DeepSeek-OCR-2 inference modules
+5. Verify all components
+
+### Manual Install
+
+```bash
+python3.12 -m venv .venv
 source .venv/bin/activate
+
+# Install PyTorch
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu118
+
+# Install vLLM
+pip install vllm==0.8.5
+
+# Install Flash Attention (optional, recommended for performance)
+pip install flash-attn==2.7.3 --no-build-isolation
+
+# Install project
 pip install -e .
 ```
 
-For development:
+### Download Model
+
+The model will be auto-downloaded from HuggingFace on first use. To pre-download:
 
 ```bash
-pip install -e ".[dev]"
+# Set mirror for China users
+export HF_ENDPOINT=https://hf-mirror.com
+
+pip install huggingface_hub
+huggingface-cli download deepseek-ai/DeepSeek-OCR-2
+```
+
+### Verify Installation
+
+```bash
+deepseek-ocr check
 ```
 
 ## Usage
@@ -68,7 +86,7 @@ pip install -e ".[dev]"
 ### CLI
 
 ```bash
-# Check that Ollama and the model are ready
+# Check environment (GPU, vLLM, model, etc.)
 deepseek-ocr check
 
 # Convert a scanned PDF (outputs dual-layer PDF + Markdown)
@@ -86,6 +104,15 @@ deepseek-ocr convert ./scanned_pdfs/
 # Skip Markdown generation
 deepseek-ocr convert input.pdf --no-markdown
 
+# Specify custom model path
+deepseek-ocr convert input.pdf --model-path /path/to/local/model
+
+# OCR + Translate to Chinese
+deepseek-ocr convert input.pdf --translate --translation-api-key sk-xxx
+
+# Translate only (equivalent to convert --translate)
+deepseek-ocr translate input.pdf --translation-api-key sk-xxx
+
 # Start the web server
 deepseek-ocr serve
 ```
@@ -99,8 +126,13 @@ deepseek-ocr serve
 | `--pdf-mode` | `PDF_OUTPUT_MODE` | `dual_layer` | Output mode: `dual_layer` or `rewrite` |
 | `--no-pdf` | — | — | Skip PDF generation |
 | `--no-markdown` | — | — | Skip Markdown generation |
-| `--model` | `OLLAMA_MODEL` | `deepseek-ocr` | Ollama model name |
-| `--ollama-host` | `OLLAMA_HOST` | `http://localhost:11434` | Ollama service URL |
+| `--model-path` | `VLLM_MODEL_PATH` | `deepseek-ai/DeepSeek-OCR-2` | Model path (HF ID or local) |
+| `--translate` | — | — | Enable translation |
+| `--source-lang` | — | `English` | Source language |
+| `--target-lang` | — | `Simplified Chinese` | Target language |
+| `--translation-api-key` | `TRANSLATION_API_KEY` | — | Translation LLM API key |
+| `--translation-base-url` | `TRANSLATION_BASE_URL` | `https://api.openai.com/v1` | Translation API URL |
+| `--translation-model` | `TRANSLATION_MODEL` | `gpt-4o-mini` | Translation model |
 
 ### Web Interface
 
@@ -112,172 +144,108 @@ deepseek-ocr serve --host 0.0.0.0 --port 8080
 
 Then open http://localhost:8080 in your browser:
 
-1. **Select output mode** — Choose "Dual Layer" (default) or "Rewrite" using the radio buttons
+1. **Select output mode** — Choose "Dual Layer" (default) or "Rewrite"
 2. **Upload PDF** — Drag and drop or click to select (supports multiple files)
 3. **Watch progress** — Real-time OCR progress via SSE, with phase indicators
-4. **Download results** — Searchable PDF and Markdown files
-
-### PDF Output Modes
-
-#### Dual Layer (default)
-
-The output PDF contains the original scanned image as the visible layer, with an invisible text layer (PDF render mode 3) positioned on top. The PDF looks exactly like the original scan, but you can search, select, and copy text.
-
-#### Rewrite
-
-Text areas are covered with white rectangles and redrawn with vector fonts. This produces cleaner, crisper text compared to the original scan. Special handling:
-
-| Content Type | Rendering |
-|-------------|-----------|
-| Plain text | Vector font (Helvetica) with auto line-wrapping |
-| Display equations (`\[...\]`) | Rendered as math symbols via matplotlib |
-| Inline math (`\(...\)`) | Mixed text + math rendering via matplotlib |
-| Images & tables | Preserved from original scan |
-| Failed LaTeX formulas | Falls back to original scan (equations) or OCR text (inline) |
+4. **Download results** — Searchable PDF, Markdown, and optionally translated/bilingual PDFs
 
 ### API
 
-The web server exposes a REST API:
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/upload` | Upload PDF file(s) with `pdf_mode` parameter, returns task IDs |
+| `POST` | `/api/upload` | Upload PDF file(s) with `pdf_mode` and `translate` parameters |
 | `GET` | `/api/progress/{task_id}` | SSE stream of conversion progress |
-| `GET` | `/api/download/{task_id}/pdf` | Download the searchable PDF result |
-| `GET` | `/api/download/{task_id}/markdown` | Download the Markdown result |
-| `GET` | `/api/health` | Service health check (Ollama + model status) |
-
-**Upload example:**
-
-```bash
-curl -X POST http://localhost:8080/api/upload \
-  -F "files=@input.pdf" \
-  -F "pdf_mode=rewrite"
-```
+| `GET` | `/api/download/{task_id}/pdf` | Download searchable PDF |
+| `GET` | `/api/download/{task_id}/markdown` | Download Markdown |
+| `GET` | `/api/download/{task_id}/translated_pdf` | Download translated PDF |
+| `GET` | `/api/download/{task_id}/bilingual_pdf` | Download bilingual PDF |
+| `GET` | `/api/health` | Service health (GPU, model, engine status) |
 
 ## How It Works
 
 ```
-Scanned PDF
-    |
-    v
-PDFReader --- Renders each page as a PNG image
-    |
-    v
-OCREngine --- Sends image to DeepSeek-OCR via Ollama (grounding mode)
-    |
-    v
-OutputParser --- Extracts text blocks with normalized coordinates (0-999)
-    |
-    |---> DualLayerPDFWriter --- Multi-process parallel rendering --> Searchable PDF
-    |         |-- dual_layer: invisible text over original images
-    |         |-- rewrite: white cover + vector text / LaTeX rendering
-    |
-    |---> MarkdownWriter --- Formats extracted text --> Markdown file
-    |
-    |---> OCR Cache --- Per-page results cached by PDF MD5 hash
+PDF → PDFTypeDetector (auto-detect)
+  ├─ [Scanned PDF] → PDFReader (PNG per page)
+  │       │
+  │       v
+  │   OCREngine (vLLM + DeepSeek-OCR-2, grounding mode)
+  │       │
+  │       v
+  │   OutputParser → TextBlocks with coordinates (0-999)
+  │       │
+  │       ├──> DualLayerPDFWriter → Searchable PDF
+  │       ├──> MarkdownWriter → .md file
+  │       └──> Translator → TranslatedPDFWriter
+  │               ├──> Translated PDF ({stem}_{lang}.pdf)
+  │               └──> Bilingual PDF ({stem}_bilingual.pdf)
+  │
+  └─ [Text PDF] → TextPDFExtractor (PyMuPDF direct extract)
+          │
+          └──> ParsedPage → same rendering pipeline
 ```
-
-### Performance
-
-- **Multi-process rendering**: PDF pages are rendered in parallel using `ProcessPoolExecutor` with forkserver context. Workers = CPU cores - 2.
-- **OCR caching**: Results are persisted to `uploads/ocr_cache/{pdf_md5}/page_NNNN.json`. Re-uploading the same PDF skips OCR entirely.
-- **Concurrency control**: GPU OCR is serialized (Semaphore(1)) to prevent VRAM overflow. PDF generation is also serialized to avoid PyMuPDF GIL contention.
 
 ## Configuration
 
-Copy `.env.template` to `.env` and uncomment the items you want to customize:
+Copy `.env.template` to `.env` and customize:
 
 ```bash
 cp .env.template .env
-vi .env   # Edit as needed
 ```
 
-All options can be set via `.env` file, environment variables, or CLI flags. **Priority: CLI flags > `.env` / env vars > defaults.**
+**Priority: CLI flags > `.env` / env vars > defaults.**
 
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
-| **Ollama** | | |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama service URL |
-| `OLLAMA_MODEL` | `deepseek-ocr` | OCR model name |
-| `OLLAMA_TIMEOUT` | `300` | OCR request timeout (seconds) |
-| `OLLAMA_KEEP_ALIVE` | `-1` | Model keep-alive duration |
+| **vLLM Engine** | | |
+| `VLLM_MODEL_PATH` | `deepseek-ai/DeepSeek-OCR-2` | Model path (HuggingFace ID or local) |
+| `VLLM_GPU_MEMORY_UTILIZATION` | `0.85` | GPU memory usage ratio (0.0-1.0) |
+| `VLLM_MAX_MODEL_LEN` | `8192` | Max model context length |
+| `VLLM_DTYPE` | `bfloat16` | Model data type |
+| `VLLM_TENSOR_PARALLEL_SIZE` | `1` | Number of GPUs for tensor parallelism |
+| `VLLM_MAX_RETRIES` | `3` | Max OCR retry attempts |
+| `VLLM_MAX_CONCURRENCY` | `100` | Max concurrent pages for PDF mode |
 | **PDF** | | |
 | `PDF_DPI` | `200` | Render resolution for page images |
-| `PDF_MAX_DIMENSION` | `1920` | Max image dimension (pixels) |
-| `PDF_OUTPUT_MODE` | `dual_layer` | Default output mode (`dual_layer` / `rewrite`) |
+| `PDF_OUTPUT_MODE` | `dual_layer` | Default output mode |
 | **Web** | | |
-| `WEB_HOST` | `0.0.0.0` | Web server bind address |
 | `WEB_PORT` | `8080` | Web server port |
-| `WEB_UPLOAD_DIR` | `./uploads` | Upload directory |
-| `WEB_MAX_UPLOAD_SIZE_MB` | `200` | Max upload size (MB) |
 | **Translation** | | |
-| `TRANSLATION_BASE_URL` | `https://api.openai.com/v1` | LLM API base URL (OpenAI-compatible) |
-| `TRANSLATION_API_KEY` | — | LLM API key |
+| `TRANSLATION_API_KEY` | — | LLM API key for translation |
 | `TRANSLATION_MODEL` | `gpt-4o-mini` | Translation model name |
-| `TRANSLATION_TIMEOUT` | `120` | Translation request timeout (seconds) |
-| `TRANSLATION_MAX_RETRIES` | `3` | Max retry attempts |
-| `TRANSLATION_TEMPERATURE` | `0.3` | Sampling temperature |
 | **Output** | | |
 | `OUTPUT_DIR` | `./output` | Default output directory |
 
 ## Deployment (systemd)
 
-To run as a system service on Linux:
-
 ```bash
-sudo tee /etc/systemd/system/deepseek-ocr.service << 'EOF'
-[Unit]
-Description=DeepSeek-OCR Web Service
-After=network.target ollama.service
+# Use the provided deployment script
+bash scripts/deploy.sh
 
-[Service]
-Type=simple
-User=your-user
-WorkingDirectory=/path/to/deepseek-ocr
-ExecStart=/path/to/deepseek-ocr/.venv/bin/deepseek-ocr serve
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+# Or manually:
+sudo cp scripts/deepseek-ocr.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now deepseek-ocr
-```
-
-### Service Management
-
-```bash
-# Restart service (e.g. after editing .env)
-sudo systemctl restart deepseek-ocr
-
-# View status
-sudo systemctl status deepseek-ocr
-
-# View logs (follow mode)
-sudo journalctl -u deepseek-ocr -f
 ```
 
 ## Project Structure
 
 ```
 src/deepseek_ocr/
-├── config.py              # Global configuration + PDFOutputMode enum
+├── config.py              # Global configuration (VLLMConfig, PDFConfig, etc.)
 ├── core/
-│   ├── pdf_reader.py      # PDF -> page images (PNG)
-│   ├── ocr_engine.py      # Ollama model inference
+│   ├── ocr_engine.py      # vLLM + DeepSeek-OCR-2 inference engine
 │   ├── output_parser.py   # Parse OCR output -> TextBlocks with coordinates
+│   ├── pdf_reader.py      # PDF -> page images (PNG)
 │   ├── pdf_writer.py      # Generate PDF (dual-layer / rewrite with LaTeX)
 │   ├── markdown_writer.py # Generate Markdown output
-│   ├── ocr_cache.py       # Per-page OCR result persistence
-│   └── pipeline.py        # Orchestrates the full conversion flow
+│   ├── translator.py      # LLM translation (OpenAI-compatible)
+│   ├── pipeline.py        # Orchestrates the full conversion flow
+│   └── ...
 ├── cli/
-│   └── main.py            # Click CLI commands (convert/check/serve)
+│   └── main.py            # Click CLI commands (convert/translate/check/serve)
 ├── web/
-│   ├── app.py             # FastAPI application factory
-│   ├── routes.py          # API route handlers + SSE progress
+│   ├── app.py             # FastAPI app factory with lifespan management
+│   ├── routes.py          # API routes + global OCR engine singleton
 │   └── static/            # Frontend (HTML/CSS/JS)
 └── utils/
     └── logger.py          # Logging utilities
