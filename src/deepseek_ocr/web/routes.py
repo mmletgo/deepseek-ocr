@@ -758,7 +758,7 @@ async def health_check() -> dict[str, Any]:
         health["gpu_available"] = torch.cuda.is_available()
         if torch.cuda.is_available():
             health["gpu_name"] = torch.cuda.get_device_name(0)
-            gpu_mem: float = torch.cuda.get_device_properties(0).total_mem / 1e9
+            gpu_mem: float = torch.cuda.get_device_properties(0).total_memory / 1e9
             health["gpu_memory_total"] = f"{gpu_mem:.1f} GB"
     except ImportError:
         health["gpu_available"] = False

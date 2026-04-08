@@ -397,7 +397,7 @@ def check(model_path: str | None) -> None:
         if torch.cuda.is_available():
             gpu_ok = True
             gpu_name: str = torch.cuda.get_device_name(0)
-            gpu_mem: float = torch.cuda.get_device_properties(0).total_mem / 1e9
+            gpu_mem: float = torch.cuda.get_device_properties(0).total_memory / 1e9
             gpu_detail = f"{gpu_name} ({gpu_mem:.1f} GB)"
         else:
             gpu_detail = "CUDA 不可用"
