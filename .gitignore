@@ -14,3 +14,4 @@ uploads/
 *.pdf
 !tests/fixtures/*.pdf
 .DS_Store
+.deepseek-ocr2/
